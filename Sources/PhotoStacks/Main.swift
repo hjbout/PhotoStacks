@@ -1,0 +1,95 @@
+import Foundation
+import StackCore
+
+@main
+enum Main {
+    static func main() {
+        if CommandLine.arguments.contains("--cli") {
+            exit(CLI.run(arguments: CommandLine.arguments))
+        }
+        PhotoStacksApp.main()
+    }
+}
+
+/// Hidden command line mode, mainly for testing: PhotoStacks --cli <map> [--dry-run | --sharpness]
+enum CLI {
+    static func run(arguments: [String]) -> Int32 {
+        let dryRun = arguments.contains("--dry-run")
+        guard let path = arguments.dropFirst().first(where: { !$0.hasPrefix("--") }) else {
+            print("Gebruik: PhotoStacks --cli <map> [--dry-run | --sharpness]")
+            return 2
+        }
+        let folder = URL(fileURLWithPath: path, isDirectory: true)
+        do {
+            let photos = try ExifToolReader.readPhotos(in: folder)
+            let detected = StackDetector.detect(photos)
+            let excluded = ExclusionStore.load(for: folder)
+            let result = DetectionResult(
+                stacks: detected.stacks.compactMap { $0.excluding(excluded) },
+                totalPhotos: detected.totalPhotos,
+                bracketPhotos: detected.bracketPhotos,
+                looseBracketPhotos: detected.looseBracketPhotos
+            )
+            if !excluded.isEmpty { print("\(excluded.count) foto's uit hun stack gehaald (FocusStacks/\(ExclusionStore.fileName))") }
+            print("\(result.totalPhotos) ORF-bestanden, \(result.bracketPhotos) focus bracketing, \(result.stacks.count) stacks")
+            for stack in result.stacks {
+                let missing = stack.missingShots
+                let note = missing.isEmpty ? "" : "  ontbreekt: \(ShotRanges.describe(missing))"
+                print("  \(stack.folderName)  Shot \(stack.firstShot)–\(stack.lastShot)\(note)")
+            }
+            for photo in result.looseBracketPhotos {
+                print("  los (geen stack): \(photo.fileName) \(photo.driveMode)")
+            }
+            if arguments.contains("--sharpness") {
+                printSharpness(of: result.stacks, in: folder)
+                return 0
+            }
+            let tiffs = DxOExports.scan(folder: folder, photos: detected.stacks.flatMap(\.photos))
+                .compactMapValues { $0.first?.fileName }
+            if !tiffs.isEmpty { print("\(tiffs.count) foto's met een DxO-TIFF") }
+            let report = LinkWriter.write(stacks: result.stacks, in: folder, dryRun: dryRun, excluded: excluded, tiffs: tiffs)
+            print("\(dryRun ? "[dry-run] " : "")links aangemaakt: \(report.created), bestonden al: \(report.alreadyPresent), "
+                + "mappen aangemaakt: \(report.foldersCreated), hernoemd: \(report.foldersRenamed), "
+                + "kapotte links opgeruimd: \(report.brokenLinksRemoved), uitgesloten links weg: \(report.excludedLinksRemoved), "
+                + "TIFF-links aangemaakt: \(report.tiffLinksCreated), TIFF-links weg: \(report.tiffLinksRemoved), "
+                + "lege mappen verwijderd: \(report.foldersRemoved)")
+            report.problems.forEach { print("  probleem: \($0)") }
+            return report.problems.isEmpty ? 0 : 1
+        } catch {
+            print("Fout: \(error.localizedDescription)")
+            return 1
+        }
+    }
+
+    /// Prints per stack frame how close it gets to the sharpest frame in its best detail tile, and the verdict.
+    private static func printSharpness(of stacks: [FocusStack], in folder: URL) {
+        let start = Date()
+        let tiles = SharpnessAnalyzer.measure(stacks.flatMap(\.photos), in: folder)
+        for stack in stacks {
+            let ratios = SharpnessAnalyzer.ratios(tiles: SharpnessAnalyzer.stackTiles(stack, tiles))
+            let unsharp = stack.photos.filter { (ratios[$0.fileName] ?? 1) < SharpnessAnalyzer.unsharpRatio }
+            print("\(stack.folderName): \(unsharp.count) onscherp")
+            let line = stack.photos.map { photo -> String in
+                guard let ratio = ratios[photo.fileName] else { return "\(photo.stem):?" }
+                return String(format: "%@:%.2f%@", photo.stem, ratio, ratio < SharpnessAnalyzer.unsharpRatio ? "*" : "")
+            }
+            print("    " + line.joined(separator: "  "))
+        }
+        print(String(format: "%d foto's gemeten in %.1f s", tiles.count, Date().timeIntervalSince(start)))
+    }
+}
+
+enum ShotRanges {
+    /// [3, 4, 5, 9] -> "3–5, 9"
+    static func describe(_ shots: [Int]) -> String {
+        var parts: [String] = []
+        var index = 0
+        while index < shots.count {
+            var end = index
+            while end + 1 < shots.count, shots[end + 1] == shots[end] + 1 { end += 1 }
+            parts.append(end == index ? "\(shots[index])" : "\(shots[index])–\(shots[end])")
+            index = end + 1
+        }
+        return parts.joined(separator: ", ")
+    }
+}
