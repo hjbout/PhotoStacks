@@ -32,8 +32,9 @@ naar de Prullenmand.
     (handig voor een onscherpe staart); andere stacks blijven ongemoeid.
   - Bestaat FocusStacks al, dan worden links en mapnamen meteen bijgewerkt.
 - DxO PhotoLab-TIFFs: exporteer je de foto's van een stack als TIFF naar dezelfde map (bv. `OM1R5855_DxO.tif`),
-  dan komen er links naar in `FocusStacks/<stack>/TIFF/`. Herkend worden TIFFs die met de fotonaam beginnen en
-  "DxO" in de naam hebben (andere programma's, zoals `_Nik`, tellen niet mee); bij meerdere versies de nieuwste.
+  dan komen er links naar in `FocusStacks/<stack>/TIFF/`. Herkend worden TIFFs met exact de fotonaam
+  (`OM1R5855.tif`) en TIFFs die met de fotonaam beginnen en "DxO" in de naam hebben (andere programma's, zoals
+  `_Nik`, tellen niet mee); bij meerdere versies de nieuwste.
   De stack toont "TIFF x/y"; de Helicon-knop krijgt een menu RAW/TIFF en opent standaard TIFF als élke foto er een
   heeft. Nieuwe exports worden opgepikt zodra je terugschakelt naar PhotoStacks. Een foto naar de Prullenmand
   neemt ook zijn DxO-TIFF(s) mee.

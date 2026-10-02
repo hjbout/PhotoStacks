@@ -349,18 +349,22 @@ private func setModified(_ url: URL, _ seconds: TimeInterval) throws {
         "OM1R1001.ORF": "o", "OM1R1002.ORF": "o", "OM1R10011.ORF": "o", "_OM13266.ORF": "o",
         "OM1R1001_DxO.tif": "t", "OM1R1001_DxO (1).tif": "t2", "OM1R1001_DxO.tif.dop": "d",
         "OM1R1001_Nik.tif": "n", "OM1R1002_M_DXO.TIFF": "m", "OM1R10011_DxO.tif": "x",
-        "_OM13266_DxO.tif": "u", "OM1R1002.tif": "plain",
+        "_OM13266_DxO.tif": "u", "OM1R1002.tif": "same name", "OM1R1003.TIF": "same name, capitals",
+        "OM1R1003.jpg": "not a tiff",
     ])
     defer { try? FileManager.default.removeItem(at: folder) }
     try setModified(folder.appendingPathComponent("OM1R1001_DxO.tif"), 1000)
     try setModified(folder.appendingPathComponent("OM1R1001_DxO (1).tif"), 2000)
-    let photos = ["OM1R1001.ORF", "OM1R1002.ORF", "OM1R10011.ORF", "_OM13266.ORF"].map {
+    try setModified(folder.appendingPathComponent("OM1R1002.tif"), 3000)
+    try setModified(folder.appendingPathComponent("OM1R1002_M_DXO.TIFF"), 2000)
+    let photos = ["OM1R1001.ORF", "OM1R1002.ORF", "OM1R1003.ORF", "OM1R10011.ORF", "_OM13266.ORF"].map {
         PhotoInfo(fileName: $0, driveMode: "")
     }
     let found = DxOExports.scan(folder: folder, photos: photos).mapValues { $0.map(\.fileName) }
     #expect(found == [
         "OM1R1001.ORF": ["OM1R1001_DxO (1).tif", "OM1R1001_DxO.tif"],  // newest first
-        "OM1R1002.ORF": ["OM1R1002_M_DXO.TIFF"],
+        "OM1R1002.ORF": ["OM1R1002.tif", "OM1R1002_M_DXO.TIFF"],  // same name counts too; newest first
+        "OM1R1003.ORF": ["OM1R1003.TIF"],
         "OM1R10011.ORF": ["OM1R10011_DxO.tif"],
         "_OM13266.ORF": ["_OM13266_DxO.tif"],
     ])
