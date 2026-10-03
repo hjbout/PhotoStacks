@@ -120,13 +120,13 @@ public enum SharpnessAnalyzer {
     }
 
     /// The frames of `stack` on which nothing is sharp, given the measurements of (at least) its photos.
-    public static func unsharpPhotos(in stack: FocusStack, tiles: [String: [Double]]) -> [PhotoInfo] {
+    public static func unsharpPhotos(in stack: PhotoStack, tiles: [String: [Double]]) -> [PhotoInfo] {
         let names = unsharp(tiles: stackTiles(stack, tiles))
         return stack.photos.filter { names.contains($0.fileName) }
     }
 
     /// The measurements of just the photos of `stack`.
-    public static func stackTiles(_ stack: FocusStack, _ tiles: [String: [Double]]) -> [String: [Double]] {
+    public static func stackTiles(_ stack: PhotoStack, _ tiles: [String: [Double]]) -> [String: [Double]] {
         Dictionary(uniqueKeysWithValues: stack.photos.compactMap { photo in
             tiles[photo.fileName].map { (photo.fileName, $0) }
         })

@@ -27,27 +27,34 @@ enum CLI {
             let result = DetectionResult(
                 stacks: detected.stacks.compactMap { $0.excluding(excluded) },
                 totalPhotos: detected.totalPhotos,
-                bracketPhotos: detected.bracketPhotos,
-                looseBracketPhotos: detected.looseBracketPhotos
+                sequencePhotos: detected.sequencePhotos,
+                loosePhotos: detected.loosePhotos
             )
-            if !excluded.isEmpty { print("\(excluded.count) foto's uit hun stack gehaald (FocusStacks/\(ExclusionStore.fileName))") }
-            print("\(result.totalPhotos) ORF-bestanden, \(result.bracketPhotos) focus bracketing, \(result.stacks.count) stacks")
-            for stack in result.stacks {
-                let missing = stack.missingShots
-                let note = missing.isEmpty ? "" : "  ontbreekt: \(ShotRanges.describe(missing))"
-                print("  \(stack.folderName)  Shot \(stack.firstShot)–\(stack.lastShot)\(note)")
+            if !excluded.isEmpty {
+                print("\(excluded.count) foto's uit hun stack gehaald (\(StackKind.focus.outputFolderName)/\(ExclusionStore.fileName))")
             }
-            for photo in result.looseBracketPhotos {
+            let perKind = StackKind.allCases.compactMap { kind -> String? in
+                let count = result.stacks.filter { $0.kind == kind }.count
+                return count == 0 ? nil : "\(count) \(kind.title)"
+            }
+            print("\(result.totalPhotos) ORF-bestanden, \(result.sequencePhotos) in een reeks, \(result.stacks.count) stacks"
+                + (perKind.isEmpty ? "" : " (\(perKind.joined(separator: ", ")))"))
+            for stack in result.stacks {
+                let missing = stack.kind.reportsMissingShots ? stack.missingShots : []
+                let note = missing.isEmpty ? "" : "  ontbreekt: \(ShotRanges.describe(missing))"
+                print("  [\(stack.kind.title)] \(stack.kind.outputFolderName)/\(stack.folderName)  Shot \(stack.firstShot)–\(stack.lastShot)\(note)")
+            }
+            for photo in result.loosePhotos {
                 print("  los (geen stack): \(photo.fileName) \(photo.driveMode)")
             }
             if arguments.contains("--sharpness") {
-                printSharpness(of: result.stacks, in: folder)
+                printSharpness(of: result.stacks.filter(\.kind.measuresSharpness), in: folder)
                 return 0
             }
             let tiffs = DxOExports.scan(folder: folder, photos: detected.stacks.flatMap(\.photos))
                 .compactMapValues { $0.first?.fileName }
             if !tiffs.isEmpty { print("\(tiffs.count) foto's met een DxO-TIFF") }
-            let report = LinkWriter.write(stacks: result.stacks, in: folder, dryRun: dryRun, excluded: excluded, tiffs: tiffs)
+            let report = LinkWriter.writeAll(stacks: result.stacks, in: folder, dryRun: dryRun, excluded: excluded, tiffs: tiffs)
             print("\(dryRun ? "[dry-run] " : "")links aangemaakt: \(report.created), bestonden al: \(report.alreadyPresent), "
                 + "mappen aangemaakt: \(report.foldersCreated), hernoemd: \(report.foldersRenamed), "
                 + "kapotte links opgeruimd: \(report.brokenLinksRemoved), uitgesloten links weg: \(report.excludedLinksRemoved), "
@@ -62,7 +69,7 @@ enum CLI {
     }
 
     /// Prints per stack frame how close it gets to the sharpest frame in its best detail tile, and the verdict.
-    private static func printSharpness(of stacks: [FocusStack], in folder: URL) {
+    private static func printSharpness(of stacks: [PhotoStack], in folder: URL) {
         let start = Date()
         let tiles = SharpnessAnalyzer.measure(stacks.flatMap(\.photos), in: folder)
         for stack in stacks {

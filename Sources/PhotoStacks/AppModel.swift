@@ -7,9 +7,9 @@ import StackCore
 struct StackEntry: Identifiable {
     let key: String
     /// All photos of the stack as detected, including the ones taken out of the stack (trashed ones removed).
-    var detected: FocusStack
+    var detected: PhotoStack
     /// The stack without the photos taken out; nil when fewer than 2 photos remain.
-    var active: FocusStack?
+    var active: PhotoStack?
     /// Photos of the active stack on which nothing is sharp.
     var unsharp: [PhotoInfo] = []
 
@@ -86,6 +86,8 @@ final class AppModel {
     var phase: Phase = .idle
     var result: DetectionResult?
     var entries: [StackEntry] = []
+    /// Shown kind of stack, nil for all kinds.
+    var kindFilter: StackKind?
     /// Photos the user took out of their stack (stored in FocusStacks/.uitgesloten).
     var excluded = Set<String>()
     var report: LinkReport?
@@ -123,18 +125,39 @@ final class AppModel {
     private let syncQueue = DispatchQueue(label: "PhotoStacks.sync")
 
     let heliconURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.heliconsoft.heliconfocus")
+    let photomatixURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.hdrsoft.PhotomatixPro")
 
-    var outputFolder: URL? { folder.map(LinkWriter.outputFolder(for:)) }
-    var hasOutputFolder: Bool { outputFolder.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
+    /// The output folders (FocusStacks, HDRStacks …) that exist.
+    var outputFolders: [URL] {
+        guard let folder else { return [] }
+        return StackKind.allCases.map { LinkWriter.outputFolder(for: folder, kind: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+    var hasOutputFolder: Bool { !outputFolders.isEmpty }
     var showReportDetails = false
-    var activeStacks: [FocusStack] { entries.compactMap(\.active) }
+    var activeStacks: [PhotoStack] { entries.compactMap(\.active) }
+
+    /// The entries of the chosen kind.
+    var visibleEntries: [StackEntry] {
+        guard let kindFilter else { return entries }
+        return entries.filter { $0.detected.kind == kindFilter }
+    }
+
+    /// Number of stacks per kind, for the kinds that occur.
+    var kindCounts: [(kind: StackKind, count: Int)] {
+        StackKind.allCases.compactMap { kind in
+            let count = entries.filter { $0.detected.kind == kind }.count
+            return count == 0 ? nil : (kind, count)
+        }
+    }
 
     /// The newest installed DxO PhotoLab (bundle identifiers com.dxo.PhotoLab<versie>).
     let photoLabURL = [11, 10, 9, 8, 7].lazy
         .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.dxo.PhotoLab\($0)") }
         .first
 
-    enum HeliconKind { case raw, tiff }
+    /// Which files of a stack go to Helicon or Photomatix.
+    enum SourceKind { case raw, tiff }
 
     init() {
         // Back from DxO PhotoLab: pick up new TIFF exports (only a directory listing).
@@ -170,6 +193,13 @@ final class AppModel {
         }
         folder = url
         scan()
+        showMainWindow()
+    }
+
+    /// Brings the main window to the front (also when a folder arrives via Finder or the open panel).
+    private func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.makeKeyAndOrderFront(nil)
     }
 
     func scan() {
@@ -211,6 +241,7 @@ final class AppModel {
         self.excluded = excluded
         tiffIndex = tiffs
         entries = result.stacks.map { StackEntry(key: $0.photos[0].fileName, detected: $0) }
+        if let kindFilter, !entries.contains(where: { $0.detected.kind == kindFilter }) { self.kindFilter = nil }
         recompute()
         phase = .scanned
         measureSharpness(of: result.stacks, in: folder)
@@ -223,7 +254,7 @@ final class AppModel {
             let active = entries[index].detected.excluding(excluded)
             entries[index].active = active
             entries[index].unsharp = []
-            guard let active, !tiles.isEmpty else { continue }
+            guard let active, active.kind.measuresSharpness, !tiles.isEmpty else { continue }
             let stackRatios = SharpnessAnalyzer.ratios(tiles: SharpnessAnalyzer.stackTiles(active, tiles))
             ratios.merge(stackRatios) { $1 }
             entries[index].unsharp = active.photos.filter {
@@ -285,7 +316,7 @@ final class AppModel {
     }
 
     /// TIFF when every photo of the stack has a DxO TIFF, otherwise RAW.
-    func defaultHeliconKind(_ entry: StackEntry) -> HeliconKind {
+    func defaultSourceKind(_ entry: StackEntry) -> SourceKind {
         let count = tiffCount(entry)
         return count.total > 0 && count.found == count.total ? .tiff : .raw
     }
@@ -298,24 +329,25 @@ final class AppModel {
         refreshTIFFs()
         let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
         syncQueue.async {
-            let report = LinkWriter.write(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
+            let report = LinkWriter.writeAll(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
             Task { @MainActor in self.finishWrite(report, for: folder) }
         }
     }
 
-    /// After a photo was taken out, put back or trashed: update FocusStacks if it has stack folders already.
+    /// After a photo was taken out, put back or trashed: update the output folders if they have stack folders already.
     private func syncIfNeeded() {
-        guard let folder, let outputFolder else { return }
-        let hasStackFolders = ((try? FileManager.default.contentsOfDirectory(atPath: outputFolder.path)) ?? [])
-            .contains { name in
+        guard let folder else { return }
+        let hasStackFolders = outputFolders.contains { outputFolder in
+            ((try? FileManager.default.contentsOfDirectory(atPath: outputFolder.path)) ?? []).contains { name in
                 var isDirectory: ObjCBool = false
                 return FileManager.default.fileExists(atPath: outputFolder.appendingPathComponent(name).path,
                                                       isDirectory: &isDirectory) && isDirectory.boolValue
             }
+        }
         guard hasStackFolders else { return }
         let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
         syncQueue.async {
-            let report = LinkWriter.write(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
+            let report = LinkWriter.writeAll(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
             Task { @MainActor in
                 guard folder == self.folder else { return }
                 self.report = report
@@ -323,10 +355,10 @@ final class AppModel {
         }
     }
 
-    /// The stack's folder in FocusStacks, if it has been created.
-    func stackFolder(for stack: FocusStack) -> URL? {
-        guard let outputFolder else { return nil }
-        let url = outputFolder.appendingPathComponent(stack.folderName, isDirectory: true)
+    /// The stack's folder in its kind's output folder, if it has been created.
+    func stackFolder(for stack: PhotoStack) -> URL? {
+        guard let folder else { return nil }
+        let url = LinkWriter.outputFolder(for: folder, kind: stack.kind).appendingPathComponent(stack.folderName, isDirectory: true)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
             ? url : nil
@@ -338,12 +370,13 @@ final class AppModel {
     /// FocusStacks is brought up to date first (so new DxO exports are included). Helicon ignores macOS "open
     /// documents" requests, but loads all images of a folder passed as command line argument; a new instance is
     /// started so this also works while Helicon is already open (each stack gets its own Helicon window).
-    func openInHelicon(_ stack: FocusStack, kind: HeliconKind) {
-        guard let heliconURL, let folder, let outputFolder else { return }
+    func openInHelicon(_ stack: PhotoStack, kind: SourceKind) {
+        guard let heliconURL, let folder else { return }
+        let outputFolder = LinkWriter.outputFolder(for: folder, kind: stack.kind)
         refreshTIFFs()
         let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
         syncQueue.async {
-            let report = LinkWriter.write(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
+            let report = LinkWriter.writeAll(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
             Task { @MainActor in
                 guard folder == self.folder else { return }
                 self.report = report
@@ -367,8 +400,26 @@ final class AppModel {
         }
     }
 
+    /// Opens the stack's originals, or the newest DxO TIFF of each photo, in Photomatix Pro (which merges them).
+    func openInPhotomatix(_ stack: PhotoStack, kind: SourceKind) {
+        guard let photomatixURL, let folder else { return }
+        refreshTIFFs()
+        let names = kind == .tiff ? stack.photos.compactMap { tiff(for: $0)?.fileName } : stack.photos.map(\.fileName)
+        let urls = names.map { folder.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard urls.count >= 2 else {
+            alertMessage = "De bestanden van \(stack.folderName) zijn niet (meer) gevonden."
+            return
+        }
+        NSWorkspace.shared.open(urls, withApplicationAt: photomatixURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard let error else { return }
+            Task { @MainActor in
+                self.alertMessage = "Openen in Photomatix Pro mislukt: \(error.localizedDescription)"
+            }
+        }
+    }
+
     /// The stack's photos for dragging: the links in its stack folder when that exists, otherwise the originals.
-    func photoURLs(for stack: FocusStack) -> [URL] {
+    func photoURLs(for stack: PhotoStack) -> [URL] {
         guard let folder else { return [] }
         let base = stackFolder(for: stack) ?? folder
         return stack.photos
@@ -377,12 +428,14 @@ final class AppModel {
     }
 
     /// Opens the original .ORF in DxO PhotoLab.
-    func openInPhotoLab(_ photo: PhotoInfo) {
-        guard let photoLabURL, let folder else { return }
+    /// Returns false when nothing was opened.
+    @discardableResult
+    func openInPhotoLab(_ photo: PhotoInfo) -> Bool {
+        guard let photoLabURL, let folder else { return false }
         let url = folder.appendingPathComponent(photo.fileName)
         guard FileManager.default.fileExists(atPath: url.path) else {
             alertMessage = "\(photo.fileName) is niet (meer) gevonden."
-            return
+            return false
         }
         NSWorkspace.shared.open([url], withApplicationAt: photoLabURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
             guard let error else { return }
@@ -390,6 +443,7 @@ final class AppModel {
                 self.alertMessage = "Openen in DxO PhotoLab mislukt: \(error.localizedDescription)"
             }
         }
+        return true
     }
 
     func revealUnsharp(_ entry: StackEntry) {
@@ -413,8 +467,9 @@ final class AppModel {
     }
 
     func revealOutput() {
-        guard let outputFolder else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([outputFolder])
+        let folders = outputFolders
+        guard !folders.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(folders)
     }
 
     // MARK: - Taking photos out of a stack and trashing originals
@@ -464,8 +519,14 @@ final class AppModel {
     /// The DxO TIFFs of `photos`, each with its own sidecars (.dop …).
     private func tiffFiles(of photos: [PhotoInfo], in folder: URL) -> (tiffs: [TIFFFile], files: [URL]) {
         let tiffs = photos.flatMap { tiffIndex[$0.fileName] ?? [] }
-        let files = tiffs.flatMap { tiff in
-            Sidecars.files(forStem: (tiff.fileName as NSString).deletingPathExtension, first: tiff.fileName, in: folder)
+        // A TIFF named exactly like its photo (OM1R5855.tif) shares the stem with the .ORF and its sidecars;
+        // those belong to the original and must stay.
+        let originals = Set(photos.flatMap { Sidecars.files(for: $0, in: folder) })
+        let files = tiffs.flatMap { tiff -> [URL] in
+            let own = Sidecars.files(forStem: (tiff.fileName as NSString).deletingPathExtension, first: tiff.fileName, in: folder)
+            return own.filter { url in
+                !originals.contains(url) || url.lastPathComponent.lowercased().hasPrefix(tiff.fileName.lowercased())
+            }
         }
         return (tiffs, files)
     }
@@ -532,7 +593,7 @@ final class AppModel {
         if remaining.isEmpty {
             entries.remove(at: index)
         } else {
-            entries[index].detected = FocusStack(photos: remaining)
+            entries[index].detected = PhotoStack(photos: remaining)
         }
         for photo in removed {
             tiles[photo.fileName] = nil
@@ -726,8 +787,8 @@ final class AppModel {
 
     /// Measures all stack photos (also those taken out, so they can be put back) in the background;
     /// only reads the originals.
-    private func measureSharpness(of stacks: [FocusStack], in folder: URL) {
-        let photos = stacks.flatMap(\.photos)
+    private func measureSharpness(of stacks: [PhotoStack], in folder: URL) {
+        let photos = stacks.filter(\.kind.measuresSharpness).flatMap(\.photos)
         guard !photos.isEmpty else { return }
         let token = CancellationToken()
         sharpnessToken = token

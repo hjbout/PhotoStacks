@@ -11,25 +11,55 @@ public struct LinkReport: Sendable {
     public var tiffLinksRemoved = 0
     public var foldersRemoved = 0
     public var problems: [String] = []
+
+    public init() {}
+
+    /// Adds the counts and problems of another report (e.g. of another kind's output folder).
+    public mutating func merge(_ other: LinkReport) {
+        created += other.created
+        alreadyPresent += other.alreadyPresent
+        foldersCreated += other.foldersCreated
+        foldersRenamed += other.foldersRenamed
+        brokenLinksRemoved += other.brokenLinksRemoved
+        excludedLinksRemoved += other.excludedLinksRemoved
+        tiffLinksCreated += other.tiffLinksCreated
+        tiffLinksRemoved += other.tiffLinksRemoved
+        foldersRemoved += other.foldersRemoved
+        problems += other.problems
+    }
 }
 
-/// Brings FocusStacks/<stack>/<photo> (relative symlinks to the originals) in line with the detected stacks.
+/// Brings <kind folder>/<stack>/<photo> (relative symlinks to the originals) in line with the detected stacks;
+/// each kind of sequence has its own output folder (FocusStacks, HDRStacks …) next to the originals.
 ///
-/// Nothing outside FocusStacks is ever touched. Inside it, the only things ever removed are the app's own
+/// Nothing outside the output folder is ever touched. Inside it, the only things ever removed are the app's own
 /// links (a symlink "<name>" -> "../../<name>") whose original is gone or that the user took out of the stack
 /// (`excluded`), and stack folders that are empty afterwards (apart from a Finder .DS_Store). Each stack folder can
 /// have a subfolder `TIFF` with links to the stack's DxO TIFFs (`tiffs`: photo file name -> TIFF file name), managed
 /// the same way. Existing stack folders are recognised by the photos
 /// their links point to and renamed when the stack's name changed. Existing items are never overwritten.
 public enum LinkWriter {
-    public static let outputFolderName = "FocusStacks"
-
-    public static func outputFolder(for folder: URL) -> URL {
-        folder.appendingPathComponent(outputFolderName, isDirectory: true)
+    public static func outputFolder(for folder: URL, kind: StackKind = .focus) -> URL {
+        folder.appendingPathComponent(kind.outputFolderName, isDirectory: true)
     }
 
-    public static func write(stacks: [FocusStack], in folder: URL, dryRun: Bool = false,
+    /// Writes the stacks of every kind into their own output folder. A kind without stacks is only processed when
+    /// its folder exists (to clean up), so no empty output folders are made.
+    public static func writeAll(stacks: [PhotoStack], in folder: URL, dryRun: Bool = false,
+                                excluded: Set<String> = [], tiffs: [String: String] = [:]) -> LinkReport {
+        var report = LinkReport()
+        for kind in StackKind.allCases {
+            let ofKind = stacks.filter { $0.kind == kind }
+            guard !ofKind.isEmpty || fileType(atPath: outputFolder(for: folder, kind: kind).path) != nil else { continue }
+            report.merge(write(stacks: ofKind, in: folder, kind: kind, dryRun: dryRun, excluded: excluded, tiffs: tiffs))
+        }
+        return report
+    }
+
+    /// Writes `stacks` (all of `kind`) into the kind's output folder.
+    public static func write(stacks: [PhotoStack], in folder: URL, kind: StackKind = .focus, dryRun: Bool = false,
                              excluded: Set<String> = [], tiffs: [String: String] = [:]) -> LinkReport {
+        let outputFolderName = kind.outputFolderName
         let fm = FileManager.default
         var report = LinkReport()
         let root = folder.standardizedFileURL.path
@@ -56,7 +86,7 @@ public enum LinkWriter {
             return report
         }
 
-        // Names present in FocusStacks; kept up to date so dry runs see the same state as real runs.
+        // Names present in the output folder; kept up to date so dry runs see the same state as real runs.
         var present = Set((try? fm.contentsOfDirectory(atPath: output)) ?? [])
         var folders = present.sorted()
             .filter { fileType(atPath: path($0)) == .typeDirectory }
@@ -354,7 +384,7 @@ public enum LinkWriter {
     }
 
     /// Greedy matching on the number of shared photos; an identical name wins ties.
-    private static func match(_ stacks: [FocusStack], to folders: [ExistingFolder]) -> [Int: Int] {
+    private static func match(_ stacks: [PhotoStack], to folders: [ExistingFolder]) -> [Int: Int] {
         var pairs: [(stack: Int, folder: Int, overlap: Int, sameName: Int)] = []
         for (stackIndex, stack) in stacks.enumerated() {
             let names = Set(stack.photos.map(\.fileName))

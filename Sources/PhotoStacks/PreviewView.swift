@@ -30,6 +30,11 @@ struct PreviewView: View {
             .modifier(ModelAlerts(model: model, inPreview: true))
     }
 
+    /// The viewer has done its job once the photo is open in PhotoLab.
+    private func openInPhotoLab(_ photo: PhotoInfo) {
+        if model.openInPhotoLab(photo) { model.closePreview() }
+    }
+
     private var isExcluded: Bool {
         model.previewPhoto.map { model.excluded.contains($0.fileName) } ?? false
     }
@@ -38,7 +43,7 @@ struct PreviewView: View {
     private var subtitle: String {
         guard let photo = model.previewPhoto else { return "" }
         var parts: [String] = []
-        if let shot = photo.bracketShot { parts.append("Shot \(shot)") }
+        if let shot = photo.shot { parts.append("Shot \(shot)") }
         if let entry = model.preview.flatMap({ model.entry($0.entryKey) }) { parts.append(entry.name) }
         if let index = model.previewPhotos.firstIndex(of: photo) {
             parts.append("\(index + 1) van \(model.previewPhotos.count)")
@@ -83,7 +88,7 @@ struct PreviewView: View {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             if let photo = model.previewPhoto, let entryKey = model.preview?.entryKey {
-                Button { model.openInPhotoLab(photo) } label: {
+                Button { openInPhotoLab(photo) } label: {
                     Label("DxO PhotoLab", systemImage: "slider.horizontal.3")
                 }
                 .disabled(model.photoLabURL == nil)
@@ -123,7 +128,7 @@ struct PreviewView: View {
             Button("") { model.movePreview(by: -1) }.keyboardShortcut(.leftArrow, modifiers: [])
             Button("") { model.movePreview(by: 1) }.keyboardShortcut(.rightArrow, modifiers: [])
             Button("") { model.zoom(.toggle) }.keyboardShortcut("z", modifiers: [])
-            Button("") { if let photo = model.previewPhoto { model.openInPhotoLab(photo) } }
+            Button("") { if let photo = model.previewPhoto { openInPhotoLab(photo) } }
                 .keyboardShortcut("e", modifiers: .command)
             Button("") { model.zoom(.zoomIn) }.keyboardShortcut("=", modifiers: .command)
             Button("") { model.zoom(.zoomOut) }.keyboardShortcut("-", modifiers: .command)

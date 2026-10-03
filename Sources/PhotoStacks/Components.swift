@@ -86,9 +86,9 @@ struct StatusBar: View {
                 if !model.excluded.isEmpty {
                     Label("\(model.excluded.count) uit stack", systemImage: "minus.circle")
                 }
-                if !result.looseBracketPhotos.isEmpty {
-                    Label("\(result.looseBracketPhotos.count) los", systemImage: "square.dashed")
-                        .help("Focus bracketing-foto's die geen stack vormen (alleen staand)")
+                if !result.loosePhotos.isEmpty {
+                    Label("\(result.loosePhotos.count) los", systemImage: "square.dashed")
+                        .help("Reeksfoto's (bracketing, ProCap, serie) die geen stack vormen (alleen staand)")
                 }
             }
             if let progress = model.sharpnessProgress {

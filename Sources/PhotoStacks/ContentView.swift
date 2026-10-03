@@ -71,6 +71,20 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            if model.kindCounts.count > 1 {
+                let filter = Binding(get: { model.kindFilter }, set: { model.kindFilter = $0; model.selection = [] })
+                Picker("Soort", selection: filter) {
+                    Text("Alle (\(model.entries.count))").tag(StackKind?.none)
+                    ForEach(model.kindCounts, id: \.kind) { item in
+                        Text("\(item.kind.title) (\(item.count))").tag(StackKind?.some(item.kind))
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help("Toon alleen stacks van één soort")
+            }
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.chooseFolder() } label: {
                 Label("Kies map", systemImage: "folder.badge.plus")
@@ -84,16 +98,16 @@ struct ContentView: View {
             Button { model.revealOutput() } label: {
                 Label("Toon in Finder", systemImage: "folder")
             }
-            .help("Toon de map FocusStacks in de Finder")
+            .help("Toon de stack-mappen (FocusStacks, HDRStacks …) in de Finder")
             .disabled(!model.hasOutputFolder)
         }
         ToolbarItem(placement: .primaryAction) {
             Button { model.createStacks() } label: {
-                Label("Maak FocusStacks", systemImage: "square.stack.3d.up.fill")
+                Label("Maak stacks", systemImage: "square.stack.3d.up.fill")
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
-            .help("Maak of werk de stack-mappen met links bij in FocusStacks")
+            .help("Maak of werk de stack-mappen met links bij in FocusStacks, HDRStacks, ProCap en Series")
             .disabled(model.phase != .scanned && model.phase != .done || model.activeStacks.isEmpty)
         }
     }
@@ -117,9 +131,9 @@ struct ContentView: View {
         } else if model.result != nil {
             if model.entries.isEmpty {
                 ContentUnavailableView(
-                    "Geen focus stacks gevonden",
+                    "Geen reeksen gevonden",
                     systemImage: "square.stack.3d.up.slash",
-                    description: Text("\(model.result?.totalPhotos ?? 0) ORF-bestanden gescand, maar geen focus bracketing-reeksen.")
+                    description: Text("\(model.result?.totalPhotos ?? 0) ORF-bestanden gescand, maar geen focus-, HDR-, ProCap- of serie-reeksen.")
                 )
             } else {
                 stackTable
@@ -141,7 +155,7 @@ struct ContentView: View {
 
     /// Stacks with, when expanded, their photos underneath.
     private var rows: [StackRow] {
-        model.entries.flatMap { entry -> [StackRow] in
+        model.visibleEntries.flatMap { entry -> [StackRow] in
             let photos = model.expanded.contains(entry.key)
                 ? entry.detected.photos.map { StackRow.photo($0, entryKey: entry.key) } : []
             return [StackRow.stack(key: entry.key)] + photos
@@ -221,6 +235,10 @@ struct ContentView: View {
             if let entry = model.entry(key) {
                 HStack(spacing: 10) {
                     DisclosureChevron(isExpanded: model.expanded.contains(key)) { toggle(key) }
+                    Image(systemName: entry.detected.kind.systemImage)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                        .help(entry.detected.kind.title)
                     StackThumbnail(model: model, entry: entry)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(entry.name)
@@ -241,7 +259,7 @@ struct ContentView: View {
                     .monospacedDigit()
                     .strikethrough(isExcluded)
                     .foregroundStyle(isExcluded ? .secondary : .primary)
-                if let shot = photo.bracketShot {
+                if let shot = photo.shot {
                     Text("Shot \(shot)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -260,6 +278,7 @@ struct ContentView: View {
         guard let active = entry.active else { return "Te weinig foto's over" }
         let out = entry.detected.count - active.count
         var parts = ["\(active.count) foto's", "Shot \(active.firstShot)–\(active.lastShot)"]
+        if model.kindFilter == nil { parts.insert(active.kind.title, at: 0) }
         if out > 0 { parts.append("\(out) uit stack") }
         return parts.joined(separator: " · ")
     }
@@ -269,7 +288,7 @@ struct ContentView: View {
         switch row {
         case let .stack(key):
             if let entry = model.entry(key), let active = entry.active {
-                let missing = active.missingShots
+                let missing = active.kind.reportsMissingShots ? active.missingShots : []
                 let tiffs = model.tiffCount(entry)
                 HStack(spacing: 4) {
                     if !entry.unsharp.isEmpty {
@@ -280,7 +299,7 @@ struct ContentView: View {
                         Badge(text: "TIFF \(tiffs.found)/\(tiffs.total)", systemImage: "photo.stack",
                               tint: tiffs.found == tiffs.total ? .purple : .orange)
                             .help("DxO-TIFFs gevonden voor \(tiffs.found) van de \(tiffs.total) foto's"
-                                + (tiffs.found == tiffs.total ? "; Helicon opent standaard de TIFFs." : "; Helicon opent standaard de RAW-bestanden."))
+                                + (tiffs.found == tiffs.total ? "; standaard worden de TIFFs geopend." : "; standaard worden de RAW-bestanden geopend."))
                     }
                     if !missing.isEmpty {
                         Badge(text: "Mist \(ShotRanges.describe(missing))", systemImage: "exclamationmark.triangle", tint: .orange)
@@ -309,7 +328,7 @@ struct ContentView: View {
         case let .stack(key):
             if model.sharpnessProgress != nil {
                 ProgressView().controlSize(.small)
-            } else if let active = model.entry(key)?.active {
+            } else if let active = model.entry(key)?.active, active.kind.measuresSharpness {
                 SharpnessSparkline(ratios: active.photos.map { model.ratios[$0.fileName] ?? 0 })
             }
         case let .photo(photo, _):
@@ -333,8 +352,8 @@ struct ContentView: View {
                     if let active = entry.active {
                         FileDragHandle { model.photoURLs(for: active) }
                             .frame(width: 18, height: 16)
-                            .help("Sleep de foto's van deze stack naar Helicon Focus")
-                        heliconButton(entry, active: active)
+                            .help("Sleep de foto's van deze stack naar een andere app of de Finder")
+                        appButton(entry, active: active)
                     }
                     Menu {
                         Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
@@ -380,37 +399,53 @@ struct ContentView: View {
         .help(model.photoLabURL == nil ? "DxO PhotoLab is niet gevonden." : "Open deze foto in DxO PhotoLab")
     }
 
-    /// Opens the stack in Helicon; with DxO TIFFs a menu offers RAW or TIFF, and a click on the button itself opens
+    /// The app that processes a stack of this kind: Helicon Focus for focus stacks, Photomatix for HDR; bursts
+    /// have none (the best frame is picked in the preview).
+    private func app(for kind: StackKind) -> (name: String, url: URL?, open: (PhotoStack, AppModel.SourceKind) -> Void)? {
+        switch kind {
+        case .focus: ("Helicon", model.heliconURL, model.openInHelicon)
+        case .hdr: ("Photomatix", model.photomatixURL, model.openInPhotomatix)
+        case .proCap, .series: nil
+        }
+    }
+
+    private func appName(_ name: String) -> String {
+        name == "Helicon" ? "Helicon Focus" : "Photomatix Pro"
+    }
+
+    /// Opens the stack in its app; with DxO TIFFs a menu offers RAW or TIFF, and a click on the button itself opens
     /// TIFF when every photo has one.
     @ViewBuilder
-    private func heliconButton(_ entry: StackEntry, active: FocusStack) -> some View {
-        let tiffs = model.tiffCount(entry)
-        if tiffs.found == 0 {
-            Button {
-                model.openInHelicon(active, kind: .raw)
-            } label: {
-                Label("Helicon", systemImage: "arrow.up.forward.app")
+    private func appButton(_ entry: StackEntry, active: PhotoStack) -> some View {
+        if let app = app(for: active.kind) {
+            let tiffs = model.tiffCount(entry)
+            if tiffs.found == 0 {
+                Button {
+                    app.open(active, .raw)
+                } label: {
+                    Label(app.name, systemImage: "arrow.up.forward.app")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(app.url == nil)
+                .help(app.url == nil ? "\(appName(app.name)) is niet gevonden." : "Open deze stack in \(appName(app.name))")
+            } else {
+                let kind = model.defaultSourceKind(entry)
+                Menu {
+                    Button("RAW (.ORF)") { app.open(active, .raw) }
+                    Button("TIFF (DxO) – \(tiffs.found)/\(tiffs.total)") { app.open(active, .tiff) }
+                } label: {
+                    Label(kind == .tiff ? "\(app.name) TIFF" : "\(app.name) RAW", systemImage: "arrow.up.forward.app")
+                } primaryAction: {
+                    app.open(active, kind)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize()
+                .disabled(app.url == nil)
+                .help("Klik: open de \(kind == .tiff ? "TIFFs" : "RAW-bestanden") in \(appName(app.name)); pijltje: kies RAW of TIFF")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(model.heliconURL == nil)
-            .help(model.heliconURL == nil ? "Helicon Focus is niet gevonden." : "Open deze stack in Helicon Focus")
-        } else {
-            let kind = model.defaultHeliconKind(entry)
-            Menu {
-                Button("RAW (.ORF)") { model.openInHelicon(active, kind: .raw) }
-                Button("TIFF (DxO) – \(tiffs.found)/\(tiffs.total)") { model.openInHelicon(active, kind: .tiff) }
-            } label: {
-                Label(kind == .tiff ? "Helicon TIFF" : "Helicon RAW", systemImage: "arrow.up.forward.app")
-            } primaryAction: {
-                model.openInHelicon(active, kind: kind)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .fixedSize()
-            .disabled(model.heliconURL == nil)
-            .help("Klik: open de \(kind == .tiff ? "TIFFs" : "RAW-bestanden") in Helicon Focus; pijltje: kies RAW of TIFF")
         }
     }
 
@@ -420,12 +455,12 @@ struct ContentView: View {
             switch row {
             case let .stack(key):
                 if let entry = model.entry(key) {
-                    if let active = entry.active {
-                        Button("Open RAW in Helicon Focus") { model.openInHelicon(active, kind: .raw) }
-                            .disabled(model.heliconURL == nil)
+                    if let active = entry.active, let app = app(for: active.kind) {
+                        Button("Open RAW in \(appName(app.name))") { app.open(active, .raw) }
+                            .disabled(app.url == nil)
                         if model.tiffCount(entry).found > 0 {
-                            Button("Open TIFF in Helicon Focus") { model.openInHelicon(active, kind: .tiff) }
-                                .disabled(model.heliconURL == nil)
+                            Button("Open TIFF in \(appName(app.name))") { app.open(active, .tiff) }
+                                .disabled(app.url == nil)
                         }
                     }
                     Button("Toon in Finder") { model.reveal(entry) }

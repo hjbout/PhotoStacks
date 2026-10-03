@@ -11,17 +11,70 @@ private func single(_ counter: Int) -> PhotoInfo {
     PhotoInfo(fileName: "OM1R\(counter).ORF", driveMode: "Single Shot")
 }
 
-private func names(_ stack: FocusStack) -> [String] {
+private func names(_ stack: PhotoStack) -> [String] {
     stack.photos.map(\.stem)
 }
 
+private func photo(_ counter: Int, _ driveMode: String) -> PhotoInfo {
+    PhotoInfo(fileName: "OM1R\(counter).ORF", driveMode: driveMode)
+}
+
 @Test func parsesDriveMode() {
-    #expect(PhotoInfo.bracketShot(from: "Focus Bracketing, Shot 12") == 12)
-    #expect(PhotoInfo.bracketShot(from: "Focus Bracketing, Shot 3; Mechanical shutter") == 3)
-    #expect(PhotoInfo.bracketShot(from: "Single Shot") == nil)
-    #expect(PhotoInfo.bracketShot(from: "AE Bracketing, Shot 2") == nil)
-    #expect(PhotoInfo.bracketShot(from: "") == nil)
+    #expect(PhotoInfo.sequence(from: "Focus Bracketing, Shot 12")?.shot == 12)
+    #expect(PhotoInfo.sequence(from: "Focus Bracketing, Shot 3; Mechanical shutter")?.shot == 3)
+    #expect(PhotoInfo.sequence(from: "ProCap SH2, Shot 37")?.mode == "ProCap SH2")
+    #expect(PhotoInfo.sequence(from: "Single Shot") == nil)
+    #expect(PhotoInfo.sequence(from: "Self-Timer 2 sec; Anti-shock") == nil)
+    #expect(PhotoInfo.sequence(from: "") == nil)
     #expect(fb(5855, 1).counter == 5855)
+}
+
+@Test func recognisesKindsOfSequences() {
+    let kinds: [String: StackKind?] = [
+        "Focus Bracketing, Shot 5": .focus,
+        "AE Bracketing, Shot 2; Anti-shock": .hdr,
+        "AE Auto Bracketing, Shot 4": .hdr,
+        "AE Bracketing, Shot 1; Mechanical shutter": .hdr,
+        "ProCap SH2, Shot 20": .proCap,
+        "ProCap, Shot 3": .proCap,
+        "Sequential, Shot 1; Anti-shock": .series,
+        "Sequential SH2, Shot 11": .series,
+        "WB Bracketing, Shot 2": nil,
+        "Single Shot; Anti-shock": nil,
+        "Self-Timer 2 sec": nil,
+    ]
+    for (driveMode, kind) in kinds {
+        #expect(PhotoInfo(fileName: "X.ORF", driveMode: driveMode).kind == kind, "\(driveMode)")
+    }
+}
+
+@Test func exposureBracketsSplitOnResetAndOnMode() {
+    let photos = (1...5).map { photo(1340 + $0, "AE Bracketing, Shot \($0); Anti-shock") }
+        + (1...5).map { photo(1345 + $0, "AE Bracketing, Shot \($0); Anti-shock") }
+        + (1...3).map { photo(1350 + $0, "AE Auto Bracketing, Shot \($0)") }
+    let result = StackDetector.detect(photos)
+    #expect(result.stacks.map(\.count) == [5, 5, 3])
+    #expect(result.stacks.allSatisfy { $0.kind == .hdr })
+    #expect(result.sequencePhotos == 13)
+}
+
+@Test func thinnedOutBurstStaysTogether() {
+    // Burst 1: shots 1, 7, 16, 26 kept (offset 17166); burst 2 starts at shot 4 (other offset).
+    let photos = [photo(17167, "ProCap SH2, Shot 1"), photo(17173, "ProCap SH2, Shot 7"),
+                  photo(17182, "ProCap SH2, Shot 16"), photo(17192, "ProCap SH2, Shot 26"),
+                  photo(17367, "ProCap SH2, Shot 4"), photo(17368, "ProCap SH2, Shot 5")]
+    let result = StackDetector.detect(photos)
+    #expect(result.stacks.map(\.count) == [4, 2])
+    #expect(result.stacks[0].kind == .proCap)
+}
+
+@Test func differentKindsAreNotMerged() {
+    // Consecutive numbers and rising shots, but the mode changes.
+    let photos = [fb(1001, 1), fb(1002, 2), photo(1003, "AE Bracketing, Shot 3"), photo(1004, "AE Bracketing, Shot 4"),
+                  photo(1005, "ProCap SH1, Shot 5"), photo(1006, "ProCap SH2, Shot 6")]
+    let result = StackDetector.detect(photos)
+    #expect(result.stacks.map(\.kind) == [.focus, .hdr])
+    #expect(result.loosePhotos.map(\.stem) == ["OM1R1005", "OM1R1006"])
 }
 
 @Test func backToBackStacksSplitOnReset() {
@@ -57,9 +110,9 @@ private func names(_ stack: FocusStack) -> [String] {
     let photos = [single(1000), fb(1001, 1), single(1002), fb(1003, 1), fb(1004, 2)]
     let result = StackDetector.detect(photos)
     #expect(result.stacks.count == 1)
-    #expect(result.looseBracketPhotos.map(\.stem) == ["OM1R1001"])
+    #expect(result.loosePhotos.map(\.stem) == ["OM1R1001"])
     #expect(result.totalPhotos == 5)
-    #expect(result.bracketPhotos == 3)
+    #expect(result.sequencePhotos == 3)
 }
 
 @Test func sortsByFileNumbering() {
@@ -434,4 +487,30 @@ private func setModified(_ url: URL, _ seconds: TimeInterval) throws {
     let report = LinkWriter.write(stacks: [], in: folder)
     #expect(report.problems.isEmpty && report.foldersRemoved == 1 && report.tiffLinksRemoved == 2)
     #expect(try contents(LinkWriter.outputFolder(for: folder)).isEmpty)
+}
+
+@Test func writeAllUsesAFolderPerKind() throws {
+    let folder = try makeTempFolder(files: ["OM1R1001.ORF": "", "OM1R1002.ORF": "", "OM1R1003.ORF": "", "OM1R1004.ORF": ""])
+    let photos = [fb(1001, 1), fb(1002, 2), photo(1003, "AE Bracketing, Shot 1"), photo(1004, "AE Bracketing, Shot 2")]
+    let stacks = StackDetector.detect(photos).stacks
+    let report = LinkWriter.writeAll(stacks: stacks, in: folder)
+    #expect(report.problems.isEmpty)
+    #expect(report.created == 4)
+
+    let hdr = LinkWriter.outputFolder(for: folder, kind: .hdr)
+    #expect(try contents(hdr) == ["OM1R1003-OM1R1004 (2)"])
+    let link = hdr.appendingPathComponent("OM1R1003-OM1R1004 (2)/OM1R1003.ORF")
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == "../../OM1R1003.ORF")
+    #expect(try contents(LinkWriter.outputFolder(for: folder)) == ["OM1R1001-OM1R1002 (2)"])
+    // No folders for kinds without stacks.
+    #expect(!FileManager.default.fileExists(atPath: LinkWriter.outputFolder(for: folder, kind: .proCap).path))
+    #expect(!FileManager.default.fileExists(atPath: LinkWriter.outputFolder(for: folder, kind: .series).path))
+
+    // The HDR stack is gone (photos taken out): its folder in HDRStacks is cleaned up, FocusStacks stays.
+    let cleanup = LinkWriter.writeAll(stacks: Array(stacks.prefix(1)), in: folder,
+                                      excluded: ["OM1R1003.ORF", "OM1R1004.ORF"])
+    #expect(cleanup.excludedLinksRemoved == 2)
+    #expect(cleanup.foldersRemoved == 1)
+    #expect(try contents(hdr).isEmpty)
+    #expect(try contents(LinkWriter.outputFolder(for: folder)) == ["OM1R1001-OM1R1002 (2)"])
 }
