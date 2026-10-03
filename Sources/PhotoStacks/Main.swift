@@ -11,12 +11,12 @@ enum Main {
     }
 }
 
-/// Hidden command line mode, mainly for testing: PhotoStacks --cli <map> [--dry-run | --sharpness]
+/// Hidden command line mode, mainly for testing: PhotoStacks --cli <map> [--dry-run | --sharpness | --exposure]
 enum CLI {
     static func run(arguments: [String]) -> Int32 {
         let dryRun = arguments.contains("--dry-run")
         guard let path = arguments.dropFirst().first(where: { !$0.hasPrefix("--") }) else {
-            print("Gebruik: PhotoStacks --cli <map> [--dry-run | --sharpness]")
+            print("Gebruik: PhotoStacks --cli <map> [--dry-run | --sharpness | --exposure]")
             return 2
         }
         let folder = URL(fileURLWithPath: path, isDirectory: true)
@@ -47,6 +47,10 @@ enum CLI {
             for photo in result.loosePhotos {
                 print("  los (geen stack): \(photo.fileName) \(photo.driveMode)")
             }
+            if arguments.contains("--exposure") {
+                printExposure(of: result.stacks.filter { $0.kind == .hdr }, in: folder)
+                return 0
+            }
             if arguments.contains("--sharpness") {
                 printSharpness(of: result.stacks.filter(\.kind.measuresSharpness), in: folder)
                 return 0
@@ -66,6 +70,27 @@ enum CLI {
             print("Fout: \(error.localizedDescription)")
             return 1
         }
+    }
+
+    /// Prints per HDR frame how much is over- and underexposed, and per stack how well it covers the scene.
+    private static func printExposure(of stacks: [PhotoStack], in folder: URL) {
+        let start = Date()
+        let photos = stacks.flatMap(\.photos)
+        let stats = ExposureAnalyzer.measure(photos, in: folder)
+        func percent(_ value: Double) -> String { String(format: "%.2f%%", value * 100) }
+        for stack in stacks {
+            if let coverage = ExposureAnalyzer.coverage(of: stack, stats: stats) {
+                print("\(stack.folderName): hoog \(percent(coverage.highlights)), schaduw \(percent(coverage.shadows))")
+            } else {
+                print("\(stack.folderName): niet (volledig) gemeten")
+            }
+            for photo in stack.photos {
+                guard let frame = stats[photo.fileName] else { print("    \(photo.stem): ?"); continue }
+                let ev = ExposureAnalyzer.relativeEV(of: photo, in: stack, stats: stats).map { String(format: "%+.1f EV", $0) } ?? "? EV"
+                print("    \(photo.stem) \(ev)  over \(percent(frame.over))  onder \(percent(frame.under))")
+            }
+        }
+        print(String(format: "%d van %d foto's gemeten in %.1f s", stats.count, photos.count, Date().timeIntervalSince(start)))
     }
 
     /// Prints per stack frame how close it gets to the sharpest frame in its best detail tile, and the verdict.

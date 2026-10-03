@@ -17,6 +17,13 @@ naar de Prullenmand.
   Dubbelklik op een stack klapt hem uit of in.
   Bestaat de stack-map al, dan worden de links geopend, anders de originelen. Een rij kan ook als map naar
   Helicon of Finder gesleept worden (nadat de stack-map is aangemaakt).
+- Belichting (HDR): na het scannen meet de app op de achtergrond van elke HDR-foto hoeveel procent van de
+  sensorpixels over- of onderbelicht is, op de ruwe sensordata zoals FastRawViewer (niet op een gerenderd beeld).
+  Overbelicht = op het sensormaximum (4094–4095), onderbelicht = meer dan 10 stops daaronder (de ruisvloer).
+  De stackregel toont **Hoog** (overbelicht in de donkerste foto) en **Schaduw** (onderbelicht in de lichtste
+  foto): groen als de reeks het hele bereik dekt, oranje < 1%, rood daarboven. Uitgeklapt staat per foto de
+  belichting t.o.v. Shot 1 (uit sluitertijd, diafragma en ISO, dus ook in M-stand) met % over en % onder.
+  Per foto bekijken: `PhotoStacks --cli <map> --exposure`; drempels in `ExposureAnalyzer.swift`.
 - Scherpte (focus, ProCap en series; niet bij HDR, daar verschilt de belichting per foto): na het scannen meet de
   app op de achtergrond elke stack-foto (alleen lezen) en toont in de kolom
   **Onscherp** de foto's waarop niets scherp is; rechtsklik → *Toon onscherpe foto's in Finder*. Per vak van een

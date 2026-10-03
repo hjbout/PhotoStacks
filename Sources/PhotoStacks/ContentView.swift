@@ -291,6 +291,9 @@ struct ContentView: View {
                 let missing = active.kind.reportsMissingShots ? active.missingShots : []
                 let tiffs = model.tiffCount(entry)
                 HStack(spacing: 4) {
+                    if active.kind == .hdr {
+                        exposureCoverageBadges(entry)
+                    }
                     if !entry.unsharp.isEmpty {
                         Badge(text: "\(entry.unsharp.count) onscherp", systemImage: "camera.metering.unknown", tint: .red)
                             .help("Niets scherp op: " + entry.unsharp.map(\.stem).joined(separator: ", "))
@@ -307,10 +310,13 @@ struct ContentView: View {
                     }
                 }
             }
-        case let .photo(photo, _):
+        case let .photo(photo, entryKey):
             HStack(spacing: 4) {
                 if model.excluded.contains(photo.fileName) {
                     Badge(text: "Uit stack", systemImage: "minus.circle", tint: .secondary)
+                }
+                if let stats = model.exposure[photo.fileName] {
+                    exposureBadges(stats, ev: model.relativeEV(of: photo, entryKey: entryKey))
                 }
                 if let tiff = model.tiff(for: photo) {
                     let versions = model.tiffVersions(for: photo)
@@ -320,6 +326,41 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// How well an HDR bracket covers the scene: clipped highlights in its darkest frame, lost shadows in its
+    /// brightest frame.
+    @ViewBuilder
+    private func exposureCoverageBadges(_ entry: StackEntry) -> some View {
+        if let coverage = model.exposureCoverage(entry) {
+            Badge(text: "Hoog \(ExposureFormat.percent(coverage.highlights))", systemImage: "sun.max",
+                  tint: ExposureFormat.tint(coverage.highlights))
+                .help("Overbelicht in de donkerste foto: \(ExposureFormat.percent(coverage.highlights)) van de sensorpixels "
+                    + "zit op het maximum. Groen: de reeks houdt alle hooglichten.")
+            Badge(text: "Schaduw \(ExposureFormat.percent(coverage.shadows))", systemImage: "moon",
+                  tint: ExposureFormat.tint(coverage.shadows))
+                .help("Onderbelicht in de lichtste foto: \(ExposureFormat.percent(coverage.shadows)) van de sensorpixels is meer dan "
+                    + "\(ExposureAnalyzer.underexposureStops) stops donkerder dan het maximum. Groen: de reeks houdt alle schaduwen.")
+        } else if model.exposureProgress != nil {
+            ProgressView().controlSize(.small)
+        }
+    }
+
+    /// Exposure of one HDR photo, relative to the first of its stack, and how much of it is clipped.
+    @ViewBuilder
+    private func exposureBadges(_ stats: ExposureStats, ev: Double?) -> some View {
+        if let ev {
+            Text(ExposureFormat.ev(ev))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(minWidth: 52, alignment: .trailing)
+        }
+        Badge(text: ExposureFormat.percent(stats.over), systemImage: "sun.max", tint: ExposureFormat.tint(stats.over))
+            .help("Overbelicht: \(ExposureFormat.percent(stats.over)) van de sensorpixels zit op het maximum.")
+        Badge(text: ExposureFormat.percent(stats.under), systemImage: "moon", tint: ExposureFormat.tint(stats.under))
+            .help("Onderbelicht: \(ExposureFormat.percent(stats.under)) van de sensorpixels is meer dan "
+                + "\(ExposureAnalyzer.underexposureStops) stops donkerder dan het maximum.")
     }
 
     @ViewBuilder

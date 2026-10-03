@@ -24,6 +24,26 @@ struct DisclosureChevron: View {
 
 /// Small coloured label with an optional icon. On a selected (highlighted) row it turns white, like other
 /// content of the row, so it stays readable on the accent colour.
+/// Formatting of exposure measurements.
+enum ExposureFormat {
+    /// "0,04%" below 1%, otherwise "6,9%".
+    static func percent(_ fraction: Double) -> String {
+        let percent = fraction * 100
+        return percent.formatted(.number.precision(.fractionLength(percent < 1 ? 2 : 1))) + "%"
+    }
+
+    /// Green when (almost) nothing is clipped, orange below 1%, red above.
+    static func tint(_ fraction: Double) -> Color {
+        fraction < 0.001 ? .green : fraction < 0.01 ? .orange : .red
+    }
+
+    /// "+1,7 EV", "−2 EV".
+    static func ev(_ value: Double) -> String {
+        let text = abs(value).formatted(.number.precision(.fractionLength(0...1)))
+        return (value > 0.05 ? "+" : value < -0.05 ? "−" : "±") + text + " EV"
+    }
+}
+
 struct Badge: View {
     let text: String
     var systemImage: String?
@@ -96,6 +116,12 @@ struct StatusBar: View {
                     ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
                         .frame(width: 90)
                     Text("Scherpte meten")
+                }
+            } else if let progress = model.exposureProgress {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                        .frame(width: 90)
+                    Text("Belichting meten")
                 }
             } else if model.sharpnessMeasured {
                 let unsharp = model.entries.reduce(0) { $0 + $1.unsharp.count }

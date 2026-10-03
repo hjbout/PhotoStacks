@@ -514,3 +514,76 @@ private func setModified(_ url: URL, _ seconds: TimeInterval) throws {
     #expect(try contents(hdr).isEmpty)
     #expect(try contents(LinkWriter.outputFolder(for: folder)) == ["OM1R1001-OM1R1002 (2)"])
 }
+
+// MARK: - Exposure
+
+private func layout(width: Int, height: Int, offset: Int = 4, crop: (Int, Int, Int, Int)? = nil,
+                    exposure: Double? = nil) -> RawLayout {
+    let crop = crop ?? (0, 0, width, height)
+    return RawLayout(offset: offset, byteCount: width * height * 2, width: width, height: height,
+                     black: [256, 256, 256, 256], white: 4095, cropLeft: crop.0, cropTop: crop.1,
+                     cropWidth: crop.2, cropHeight: crop.3, exposure: exposure)
+}
+
+/// A file with a 4 byte header and 16-bit little-endian sensor values.
+private func plainRaw(_ values: [UInt16], offset: Int = 4) -> Data {
+    var data = Data(repeating: 0xAB, count: offset)
+    for value in values { data.append(contentsOf: [UInt8(value & 0xff), UInt8(value >> 8)]) }
+    return data
+}
+
+@Test func countsClippedSensorValues() throws {
+    // 4×2: two at the maximum (4095, 4094 is within the margin), two in the noise floor (black 256 + < 3.75).
+    let values: [UInt16] = [4095, 4094, 4093, 2000,
+                            256, 259, 260, 1000]
+    let stats = try #require(ExposureAnalyzer.stats(of: plainRaw(values), layout: layout(width: 4, height: 2)))
+    #expect(stats.over == 2.0 / 8)
+    #expect(stats.under == 2.0 / 8)
+}
+
+@Test func countsOnlyInsideTheCrop() throws {
+    // The masked first column and first row are black and must not count as underexposed.
+    let values: [UInt16] = [0, 0, 0,
+                            0, 4095, 2000,
+                            0, 2000, 2000]
+    let stats = try #require(ExposureAnalyzer.stats(of: plainRaw(values), layout: layout(width: 3, height: 3, crop: (1, 1, 2, 2))))
+    #expect(stats.over == 0.25)
+    #expect(stats.under == 0)
+}
+
+@Test func unreadableSensorDataGivesNoStats() {
+    // Strip runs past the end of the file.
+    #expect(ExposureAnalyzer.stats(of: plainRaw([1, 2, 3]), layout: layout(width: 4, height: 2)) == nil)
+}
+
+@Test func coverageIsTheLeastClippedFrame() {
+    let stack = PhotoStack(photos: [photo(1, "AE Bracketing, Shot 1"), photo(2, "AE Bracketing, Shot 2"),
+                                    photo(3, "AE Bracketing, Shot 3")])
+    var stats = [
+        "OM1R1.ORF": ExposureStats(over: 0.02, under: 0.03, exposure: 5),
+        "OM1R2.ORF": ExposureStats(over: 0, under: 0.30, exposure: 3),
+    ]
+    #expect(ExposureAnalyzer.coverage(of: stack, stats: stats) == nil)  // not every frame measured yet
+    stats["OM1R3.ORF"] = ExposureStats(over: 0.07, under: 0.0001, exposure: 6.7)
+    let coverage = ExposureAnalyzer.coverage(of: stack, stats: stats)
+    #expect(coverage?.highlights == 0)
+    #expect(coverage?.shadows == 0.0001)
+    #expect(ExposureAnalyzer.relativeEV(of: stack.photos[1], in: stack, stats: stats) == -2)
+    #expect(ExposureAnalyzer.relativeEV(of: stack.photos[2], in: stack, stats: stats) == 5.0 / 3)
+}
+
+@Test func parsesRawLayoutFromExifTool() throws {
+    let json = """
+    [{"SourceFile": "OM1R1342.ORF", "FileName": "OM1R1342.ORF", "StripOffsets": 1457122, "StripByteCounts": 15558024,
+      "ImageWidth": 5220, "ImageHeight": 3912, "BlackLevel2": "255 254 254 255", "ValidBits": "12 0",
+      "CropLeft": "12 0", "CropTop": "12 0", "CropWidth": 5184, "CropHeight": 3888,
+      "ExposureTime": 0.005, "FNumber": 7.1, "ISO": 200}]
+    """
+    let layouts = try ExifToolReader.parseRawLayouts(json: Data(json.utf8))
+    let layout = try #require(layouts["OM1R1342.ORF"])
+    #expect(layout.offset == 1457122)
+    #expect(layout.black == [255, 254, 254, 255])
+    #expect(layout.white == 4095)
+    #expect(layout.cropLeft == 12 && layout.cropTop == 12 && layout.cropWidth == 5184)
+    #expect(abs((layout.exposure ?? 0) - log2(0.005 * 200 / (7.1 * 7.1))) < 1e-9)
+}

@@ -105,6 +105,12 @@ final class AppModel {
     var sharpnessMeasured = false
     private var sharpnessToken: CancellationToken?
 
+    /// Over- and underexposure of the photos of HDR stacks, measured on the sensor data.
+    var exposure: [String: ExposureStats] = [:]
+    /// Measured / total HDR photos while the exposure measurement runs, nil otherwise.
+    var exposureProgress: (done: Int, total: Int)?
+    private var exposureToken: CancellationToken?
+
     var preview: PreviewTarget?
     var zoomCommand = ZoomCommand()
     /// Current zoom of the preview (1 = 100% = one RAW pixel per screen pixel) and whether it is fitted.
@@ -211,6 +217,9 @@ final class AppModel {
         imageCache = [:]
         fullImageCache = [:]
         sharpnessToken?.cancel()
+        exposureToken?.cancel()
+        exposure = [:]
+        exposureProgress = nil
         tiles = [:]
         ratios = [:]
         sharpnessProgress = nil
@@ -245,6 +254,7 @@ final class AppModel {
         recompute()
         phase = .scanned
         measureSharpness(of: result.stacks, in: folder)
+        measureExposure(of: result.stacks, in: folder)
     }
 
     /// Updates the active stacks and sharpness ratios after photos were taken out, put back or trashed.
@@ -597,6 +607,7 @@ final class AppModel {
         }
         for photo in removed {
             tiles[photo.fileName] = nil
+            exposure[photo.fileName] = nil
             imageCache[photo.fileName] = nil
             fullImageCache[photo.fileName] = nil
         }
@@ -815,6 +826,48 @@ final class AppModel {
         recompute()
         sharpnessProgress = nil
         sharpnessMeasured = true
+    }
+
+    // MARK: - Exposure
+
+    /// Measures how much of each HDR photo is clipped, in the background; only reads the originals.
+    private func measureExposure(of stacks: [PhotoStack], in folder: URL) {
+        let photos = stacks.filter { $0.kind == .hdr }.flatMap(\.photos)
+        guard !photos.isEmpty else { return }
+        let token = CancellationToken()
+        exposureToken = token
+        exposureProgress = (0, photos.count)
+        Task.detached {
+            let stats = ExposureAnalyzer.measure(photos, in: folder, isCancelled: { token.isCancelled }) { done in
+                if done % 5 == 0 {
+                    Task { @MainActor in self.updateExposureProgress(done, token: token) }
+                }
+            }
+            await self.finishExposure(stats, token: token)
+        }
+    }
+
+    private func updateExposureProgress(_ done: Int, token: CancellationToken) {
+        guard token === exposureToken, let total = exposureProgress?.total else { return }
+        exposureProgress = (max(done, exposureProgress?.done ?? 0), total)
+    }
+
+    private func finishExposure(_ stats: [String: ExposureStats], token: CancellationToken) {
+        guard token === exposureToken, !token.isCancelled else { return }
+        // Only photos that still exist (some may have been trashed during the measurement).
+        let present = Set(entries.flatMap { $0.detected.photos.map(\.fileName) })
+        exposure = stats.filter { present.contains($0.key) }
+        exposureProgress = nil
+    }
+
+    /// Clipped highlights in the darkest frame and lost shadows in the brightest frame of the active stack.
+    func exposureCoverage(_ entry: StackEntry) -> (highlights: Double, shadows: Double)? {
+        entry.active.flatMap { ExposureAnalyzer.coverage(of: $0, stats: exposure) }
+    }
+
+    /// Exposure of a photo in stops relative to the first photo of its stack.
+    func relativeEV(of photo: PhotoInfo, entryKey: String) -> Double? {
+        entry(entryKey).flatMap { ExposureAnalyzer.relativeEV(of: photo, in: $0.detected, stats: exposure) }
     }
 
     private func finishWrite(_ report: LinkReport, for folder: URL) {
