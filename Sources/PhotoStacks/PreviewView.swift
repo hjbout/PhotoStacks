@@ -83,6 +83,11 @@ struct PreviewView: View {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             if let photo = model.previewPhoto, let entryKey = model.preview?.entryKey {
+                Button { model.openInPhotoLab(photo) } label: {
+                    Label("DxO PhotoLab", systemImage: "slider.horizontal.3")
+                }
+                .disabled(model.photoLabURL == nil)
+                .help(model.photoLabURL == nil ? "DxO PhotoLab is niet gevonden." : "Open het origineel in DxO PhotoLab (⌘E)")
                 Button { model.reveal(photo) } label: { Label("Toon in Finder", systemImage: "folder") }
                     .help("Toon het origineel in de Finder")
                 Button { model.toggleExclusionInPreview() } label: {
@@ -118,6 +123,8 @@ struct PreviewView: View {
             Button("") { model.movePreview(by: -1) }.keyboardShortcut(.leftArrow, modifiers: [])
             Button("") { model.movePreview(by: 1) }.keyboardShortcut(.rightArrow, modifiers: [])
             Button("") { model.zoom(.toggle) }.keyboardShortcut("z", modifiers: [])
+            Button("") { if let photo = model.previewPhoto { model.openInPhotoLab(photo) } }
+                .keyboardShortcut("e", modifiers: .command)
             Button("") { model.zoom(.zoomIn) }.keyboardShortcut("=", modifiers: .command)
             Button("") { model.zoom(.zoomOut) }.keyboardShortcut("-", modifiers: .command)
             Button("") { model.toggleExclusionInPreview() }.keyboardShortcut(.delete, modifiers: [])

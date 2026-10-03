@@ -347,8 +347,9 @@ struct ContentView: View {
                 }
             }
         case let .photo(photo, entryKey):
-            HStack {
+            HStack(spacing: 10) {
                 Spacer(minLength: 0)
+                photoLabButton(photo)
                 Button {
                     model.showPreview(photo, entryKey: entryKey)
                 } label: {
@@ -359,6 +360,18 @@ struct ContentView: View {
                 .help("Foto groot bekijken (of dubbelklik)")
             }
         }
+    }
+
+    private func photoLabButton(_ photo: PhotoInfo) -> some View {
+        Button {
+            model.openInPhotoLab(photo)
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .disabled(model.photoLabURL == nil)
+        .help(model.photoLabURL == nil ? "DxO PhotoLab is niet gevonden." : "Open deze foto in DxO PhotoLab")
     }
 
     /// Opens the stack in Helicon; with DxO TIFFs a menu offers RAW or TIFF, and a click on the button itself opens
@@ -417,6 +430,8 @@ struct ContentView: View {
                 }
             case let .photo(photo, entryKey):
                 Button("Bekijk") { model.showPreview(photo, entryKey: entryKey) }
+                Button("Open in DxO PhotoLab") { model.openInPhotoLab(photo) }
+                    .disabled(model.photoLabURL == nil)
                 if model.excluded.contains(photo.fileName) {
                     Button("Terug in stack") { model.include([photo]) }
                 } else {

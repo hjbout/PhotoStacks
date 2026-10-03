@@ -122,6 +122,11 @@ final class AppModel {
     var showReportDetails = false
     var activeStacks: [FocusStack] { entries.compactMap(\.active) }
 
+    /// The newest installed DxO PhotoLab (bundle identifiers com.dxo.PhotoLab<versie>).
+    let photoLabURL = [11, 10, 9, 8, 7].lazy
+        .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.dxo.PhotoLab\($0)") }
+        .first
+
     enum HeliconKind { case raw, tiff }
 
     init() {
@@ -362,6 +367,22 @@ final class AppModel {
         return stack.photos
             .map { base.appendingPathComponent($0.fileName) }
             .filter { (try? $0.checkResourceIsReachable()) == true }
+    }
+
+    /// Opens the original .ORF in DxO PhotoLab.
+    func openInPhotoLab(_ photo: PhotoInfo) {
+        guard let photoLabURL, let folder else { return }
+        let url = folder.appendingPathComponent(photo.fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            alertMessage = "\(photo.fileName) is niet (meer) gevonden."
+            return
+        }
+        NSWorkspace.shared.open([url], withApplicationAt: photoLabURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard let error else { return }
+            Task { @MainActor in
+                self.alertMessage = "Openen in DxO PhotoLab mislukt: \(error.localizedDescription)"
+            }
+        }
     }
 
     func revealUnsharp(_ entry: StackEntry) {
