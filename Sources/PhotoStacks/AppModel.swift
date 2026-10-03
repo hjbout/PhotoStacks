@@ -42,10 +42,13 @@ struct TrashRequest: Identifiable {
     let tiffCount: Int
     /// Asked from the preview window (the confirmation shows there) or from the overview.
     let fromPreview: Bool
+    /// The whole stack goes, asked with the trash button on its row.
+    var wholeStack = false
     var id: String { photos.map(\.fileName).joined(separator: ",") }
 
     var title: String {
-        photos.count == 1 ? "Origineel naar Prullenmand?" : "\(photos.count) foto's naar Prullenmand?"
+        if wholeStack { return "Hele stack naar Prullenmand?" }
+        return photos.count == 1 ? "Origineel naar Prullenmand?" : "\(photos.count) foto's naar Prullenmand?"
     }
 
     var message: String {
@@ -53,6 +56,10 @@ struct TrashRequest: Identifiable {
         let shown = names.prefix(12).joined(separator: "\n") + (names.count > 12 ? "\n… en nog \(names.count - 12)" : "")
         let restore = "terug te zetten met Finder → Zet terug"
         let tiffs = tiffCount == 0 ? "" : tiffCount == 1 ? ", inclusief de DxO-TIFF" : ", inclusief \(tiffCount) DxO-TIFFs"
+        if wholeStack {
+            return "Stack \(stackName): alle \(photos.count) foto's, \(names.count) bestanden (.ORF en bijbestanden\(tiffs)) "
+                + "gaan naar de Prullenmand (\(restore)). Andere stacks blijven ongemoeid.\n\n\(shown)"
+        }
         guard photos.count > 1, let first = photos.first, let last = photos.last else {
             return "Deze bestanden gaan naar de Prullenmand (\(restore))\(tiffs):\n\n\(shown)"
         }
@@ -407,7 +414,7 @@ final class AppModel {
 
     /// Asks for confirmation before moving the original .ORF files and their sidecars to the Trash.
     /// `photos` all belong to the stack `entryKey`.
-    func requestTrash(_ photos: [PhotoInfo], entryKey: String, fromPreview: Bool) {
+    func requestTrash(_ photos: [PhotoInfo], entryKey: String, fromPreview: Bool, wholeStack: Bool = false) {
         guard let folder, let entry = entry(entryKey) else { return }
         refreshTIFFs()
         let present = photos.filter { entry.detected.photos.contains($0) }.compactMap { photo -> (PhotoInfo, [URL])? in
@@ -425,7 +432,14 @@ final class AppModel {
         }
         let files = present.flatMap(\.1) + tiffFiles.filter { url in !present.flatMap(\.1).contains(url) }
         trashRequest = TrashRequest(entryKey: entryKey, stackName: entry.name, photos: present.map(\.0),
-                                    files: files, tiffCount: tiffs.count, fromPreview: fromPreview)
+                                    files: files, tiffCount: tiffs.count, fromPreview: fromPreview,
+                                    wholeStack: wholeStack)
+    }
+
+    /// Every photo of the stack, also the ones taken out of it, e.g. when Helicon's result is saved and the
+    /// originals are no longer needed.
+    func requestTrashStack(_ entry: StackEntry) {
+        requestTrash(entry.detected.photos, entryKey: entry.key, fromPreview: false, wholeStack: true)
     }
 
     /// The previewed photo and all photos after it in the same stack (also those taken out of the stack).

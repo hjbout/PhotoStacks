@@ -158,7 +158,7 @@ struct ContentView: View {
             TableColumn("Scherpte") { row in sharpnessCell(row).fixedRowHeight() }
                 .width(min: 130, ideal: 140)
             TableColumn("") { row in actionCell(row).fixedRowHeight() }
-                .width(min: 150, ideal: 160)
+                .width(min: 180, ideal: 190)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
         .contextMenu(forSelectionType: String.self) { ids in
@@ -327,13 +327,23 @@ struct ContentView: View {
     private func actionCell(_ row: StackRow) -> some View {
         switch row {
         case let .stack(key):
-            if let entry = model.entry(key), let active = entry.active {
+            if let entry = model.entry(key) {
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
-                    FileDragHandle { model.photoURLs(for: active) }
-                        .frame(width: 18, height: 16)
-                        .help("Sleep de foto's van deze stack naar Helicon Focus")
-                    heliconButton(entry, active: active)
+                    if let active = entry.active {
+                        FileDragHandle { model.photoURLs(for: active) }
+                            .frame(width: 18, height: 16)
+                            .help("Sleep de foto's van deze stack naar Helicon Focus")
+                        heliconButton(entry, active: active)
+                    }
+                    Button {
+                        model.requestTrashStack(entry)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Hele stack met alle foto's naar de Prullenmand (met bevestiging)")
                 }
             }
         case let .photo(photo, entryKey):
@@ -400,6 +410,7 @@ struct ContentView: View {
                         }
                     }
                     Button("Toon in Finder") { model.reveal(entry) }
+                    Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                     if !entry.unsharp.isEmpty {
                         Button("Toon onscherpe foto's in Finder") { model.revealUnsharp(entry) }
                     }
