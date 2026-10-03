@@ -336,14 +336,20 @@ struct ContentView: View {
                             .help("Sleep de foto's van deze stack naar Helicon Focus")
                         heliconButton(entry, active: active)
                     }
-                    Button {
-                        model.requestTrashStack(entry)
+                    Menu {
+                        Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
+                        Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
+                            .disabled(!model.hasTIFFs(entry))
                     } label: {
                         Image(systemName: "trash")
+                    } primaryAction: {
+                        model.requestTrashStack(entry)
                     }
-                    .buttonStyle(.borderless)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.visible)
+                    .fixedSize()
                     .foregroundStyle(.secondary)
-                    .help("Hele stack met alle foto's naar de Prullenmand (met bevestiging)")
+                    .help("Klik: hele stack met alle foto's naar de Prullenmand; pijltje: alleen de DxO-TIFF's (altijd met bevestiging)")
                 }
             }
         case let .photo(photo, entryKey):
@@ -424,6 +430,8 @@ struct ContentView: View {
                     }
                     Button("Toon in Finder") { model.reveal(entry) }
                     Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
+                    Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
+                        .disabled(!model.hasTIFFs(entry))
                     if !entry.unsharp.isEmpty {
                         Button("Toon onscherpe foto's in Finder") { model.revealUnsharp(entry) }
                     }

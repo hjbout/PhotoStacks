@@ -44,9 +44,12 @@ struct TrashRequest: Identifiable {
     let fromPreview: Bool
     /// The whole stack goes, asked with the trash button on its row.
     var wholeStack = false
+    /// Only the DxO TIFFs of the stack go; the originals stay.
+    var tiffsOnly = false
     var id: String { photos.map(\.fileName).joined(separator: ",") }
 
     var title: String {
+        if tiffsOnly { return "DxO-TIFF's van stack naar Prullenmand?" }
         if wholeStack { return "Hele stack naar Prullenmand?" }
         return photos.count == 1 ? "Origineel naar Prullenmand?" : "\(photos.count) foto's naar Prullenmand?"
     }
@@ -56,6 +59,10 @@ struct TrashRequest: Identifiable {
         let shown = names.prefix(12).joined(separator: "\n") + (names.count > 12 ? "\n… en nog \(names.count - 12)" : "")
         let restore = "terug te zetten met Finder → Zet terug"
         let tiffs = tiffCount == 0 ? "" : tiffCount == 1 ? ", inclusief de DxO-TIFF" : ", inclusief \(tiffCount) DxO-TIFFs"
+        if tiffsOnly {
+            return "Stack \(stackName): \(names.count) bestanden (\(tiffCount) DxO-TIFFs en bijbestanden) gaan naar de Prullenmand "
+                + "(\(restore)). De .ORF-originelen blijven staan.\n\n\(shown)"
+        }
         if wholeStack {
             return "Stack \(stackName): alle \(photos.count) foto's, \(names.count) bestanden (.ORF en bijbestanden\(tiffs)) "
                 + "gaan naar de Prullenmand (\(restore)). Andere stacks blijven ongemoeid.\n\n\(shown)"
@@ -447,14 +454,38 @@ final class AppModel {
             return
         }
         // The DxO TIFFs of these photos go along, each with its own sidecars (.dop …).
-        let tiffs = present.flatMap { tiffIndex[$0.0.fileName] ?? [] }
-        let tiffFiles = tiffs.flatMap { tiff in
-            Sidecars.files(forStem: (tiff.fileName as NSString).deletingPathExtension, first: tiff.fileName, in: folder)
-        }
+        let (tiffs, tiffFiles) = tiffFiles(of: present.map(\.0), in: folder)
         let files = present.flatMap(\.1) + tiffFiles.filter { url in !present.flatMap(\.1).contains(url) }
         trashRequest = TrashRequest(entryKey: entryKey, stackName: entry.name, photos: present.map(\.0),
                                     files: files, tiffCount: tiffs.count, fromPreview: fromPreview,
                                     wholeStack: wholeStack)
+    }
+
+    /// The DxO TIFFs of `photos`, each with its own sidecars (.dop …).
+    private func tiffFiles(of photos: [PhotoInfo], in folder: URL) -> (tiffs: [TIFFFile], files: [URL]) {
+        let tiffs = photos.flatMap { tiffIndex[$0.fileName] ?? [] }
+        let files = tiffs.flatMap { tiff in
+            Sidecars.files(forStem: (tiff.fileName as NSString).deletingPathExtension, first: tiff.fileName, in: folder)
+        }
+        return (tiffs, files)
+    }
+
+    /// Whether any photo of the stack (also those taken out) has a DxO TIFF.
+    func hasTIFFs(_ entry: StackEntry) -> Bool {
+        entry.detected.photos.contains { tiffIndex[$0.fileName]?.isEmpty == false }
+    }
+
+    /// Asks for confirmation before moving only the DxO TIFFs of the stack to the Trash.
+    func requestTrashTIFFs(_ entry: StackEntry) {
+        guard let folder else { return }
+        refreshTIFFs()
+        let (tiffs, files) = tiffFiles(of: entry.detected.photos, in: folder)
+        guard !files.isEmpty else {
+            alertMessage = "Deze stack heeft geen DxO-TIFF's."
+            return
+        }
+        trashRequest = TrashRequest(entryKey: entry.key, stackName: entry.name, photos: entry.detected.photos,
+                                    files: files, tiffCount: tiffs.count, fromPreview: false, tiffsOnly: true)
     }
 
     /// Every photo of the stack, also the ones taken out of it, e.g. when Helicon's result is saved and the
@@ -482,6 +513,12 @@ final class AppModel {
     private func finishTrash(_ request: TrashRequest, trashed: [URL], error: Error?, folder: URL) {
         if let error {
             alertMessage = "Naar de Prullenmand verplaatsen is (deels) mislukt: \(error.localizedDescription)"
+        }
+        if request.tiffsOnly {
+            guard folder == self.folder else { return }
+            refreshTIFFs()
+            syncIfNeeded()
+            return
         }
         let trashedNames = Set(trashed.map(\.lastPathComponent))
         let removed = Set(request.photos.filter { trashedNames.contains($0.fileName) })
