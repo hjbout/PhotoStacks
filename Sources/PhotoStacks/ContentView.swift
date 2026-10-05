@@ -434,8 +434,9 @@ struct ContentView: View {
                         Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                         Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
                             .disabled(!model.hasTIFFs(entry))
+                        Button("Alleen JPG's van losse foto's naar Prullenmand…") { model.requestTrashFrameJPGs(entry) }
                     }
-                    .help("Klik: hele stack met alle foto's naar de Prullenmand; pijltje: alleen de DxO-TIFF's (altijd met bevestiging)")
+                    .help("Klik: hele stack met alle foto's naar de Prullenmand; pijltje: alleen de DxO-TIFF's of alleen de JPG's van de losse foto's (altijd met bevestiging)")
                 }
             }
         case let .photo(photo, entryKey):
@@ -538,6 +539,7 @@ struct ContentView: View {
                     Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                     Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
                         .disabled(!model.hasTIFFs(entry))
+                    Button("Alleen JPG's van losse foto's naar Prullenmand…") { model.requestTrashFrameJPGs(entry) }
                     if !entry.unsharp.isEmpty {
                         Button("Toon onscherpe foto's in Finder") { model.revealUnsharp(entry) }
                     }

@@ -85,3 +85,34 @@ public enum StackedImages {
         return counter - shot
     }
 }
+
+/// The JPGs the camera saves next to the RAW of each photo of a stack (RAW+JPEG), named exactly like the photo.
+/// Only the JPG of the photo itself counts: its Drive Mode is the photo's ("Focus Bracketing, Shot 3") and its
+/// Stacked Image tag says "No". The camera's stacked JPG has another name, Drive Mode "Sequential" and a Stacked Image
+/// tag with the number of images, so it is never part of this.
+public enum FrameJPGs {
+    /// Per stack photo (file name) its JPG next to it, if that is the photo's own JPG. `info` returns the Drive Mode and
+    /// Stacked Image texts of the given files; it is only asked for JPGs that exist.
+    public static func find(in folder: URL, photos: [PhotoInfo],
+                            info: ([String]) -> [String: (driveMode: String, stackedImage: String)]) -> [String: String] {
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: folder.path)) ?? []
+        var byStem: [String: String] = [:]
+        for name in names where !name.hasPrefix(".") && StackedImages.imageExtensions.contains((name as NSString).pathExtension.lowercased()) {
+            byStem[((name as NSString).deletingPathExtension).lowercased(), default: name] = name
+        }
+        let candidates = photos.compactMap { photo in byStem[photo.stem.lowercased()].map { (photo, $0) } }
+        if candidates.isEmpty { return [:] }
+        let found = info(candidates.map(\.1))
+        var result: [String: String] = [:]
+        for (photo, jpg) in candidates {
+            guard let tags = found[jpg], tags.stackedImage == "No" || tags.stackedImage.isEmpty,
+                  let own = photo.sequence, let theirs = PhotoInfo.sequence(from: tags.driveMode), own == theirs,
+                  let attributes = try? fm.attributesOfItem(atPath: folder.appendingPathComponent(jpg).path),
+                  attributes[.type] as? FileAttributeType == .typeRegular
+            else { continue }
+            result[photo.fileName] = jpg
+        }
+        return result
+    }
+}

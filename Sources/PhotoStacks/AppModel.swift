@@ -48,10 +48,13 @@ struct TrashRequest: Identifiable {
     var wholeStack = false
     /// Only the DxO TIFFs of the stack go; the originals stay.
     var tiffsOnly = false
+    /// Only the camera's JPGs of the stack's photos go (not its stacked JPG); the originals stay.
+    var jpgsOnly = false
     var id: String { photos.map(\.fileName).joined(separator: ",") }
 
     var title: String {
         if tiffsOnly { return "DxO-TIFF's van stack naar Prullenmand?" }
+        if jpgsOnly { return "JPG's van losse foto's naar Prullenmand?" }
         if wholeStack { return "Hele stack naar Prullenmand?" }
         return photos.count == 1 ? "Origineel naar Prullenmand?" : "\(photos.count) foto's naar Prullenmand?"
     }
@@ -64,6 +67,10 @@ struct TrashRequest: Identifiable {
         if tiffsOnly {
             return "Stack \(stackName): \(names.count) bestanden (\(tiffCount) DxO-TIFFs en bijbestanden) gaan naar de Prullenmand "
                 + "(\(restore)). De .ORF-originelen blijven staan.\n\n\(shown)"
+        }
+        if jpgsOnly {
+            return "Stack \(stackName): \(names.count) JPG's van de losse foto's gaan naar de Prullenmand (\(restore)). "
+                + "De .ORF-originelen en de stacked JPG van de camera blijven staan.\n\n\(shown)"
         }
         if wholeStack {
             return "Stack \(stackName): alle \(photos.count) foto's, \(names.count) bestanden (.ORF en bijbestanden\(tiffs)) "
@@ -690,6 +697,30 @@ final class AppModel {
                                     files: files, tiffCount: tiffs.count, fromPreview: false, tiffsOnly: true)
     }
 
+    /// Asks for confirmation before moving the camera's JPGs of the stack's photos to the Trash (never the stacked JPG).
+    /// Which JPGs those are follows from their Drive Mode and Stacked Image tags, read in the background.
+    func requestTrashFrameJPGs(_ entry: StackEntry) {
+        guard let folder else { return }
+        let photos = entry.detected.photos, key = entry.key, name = entry.name
+        Task.detached {
+            let found = FrameJPGs.find(in: folder, photos: photos) { names in
+                (try? ExifToolReader.readDriveAndStack(files: names, in: folder)) ?? [:]
+            }
+            let files = photos.compactMap { found[$0.fileName] }.map { folder.appendingPathComponent($0) }
+            await self.showFrameJPGRequest(files, photos: photos, key: key, name: name, for: folder)
+        }
+    }
+
+    private func showFrameJPGRequest(_ files: [URL], photos: [PhotoInfo], key: String, name: String, for folder: URL) {
+        guard folder == self.folder else { return }
+        guard !files.isEmpty else {
+            alertMessage = "Deze stack heeft geen JPG's van de losse foto's."
+            return
+        }
+        trashRequest = TrashRequest(entryKey: key, stackName: name, photos: photos, files: files, tiffCount: 0,
+                                    fromPreview: false, jpgsOnly: true)
+    }
+
     /// Every photo of the stack, also the ones taken out of it, e.g. when Helicon's result is saved and the
     /// originals are no longer needed.
     func requestTrashStack(_ entry: StackEntry) {
@@ -716,6 +747,7 @@ final class AppModel {
         if let error {
             alertMessage = "Naar de Prullenmand verplaatsen is (deels) mislukt: \(error.localizedDescription)"
         }
+        if request.jpgsOnly { return }
         if request.tiffsOnly {
             guard folder == self.folder else { return }
             refreshTIFFs()

@@ -87,6 +87,26 @@ public enum ExifToolReader {
         return counts
     }
 
+    /// What the camera wrote in the Drive Mode and Stacked Image tags of each file, as text ("Focus Bracketing, Shot 3",
+    /// "No"). A tag a file doesn't have gives "".
+    public static func readDriveAndStack(files: [String], in folder: URL) throws -> [String: (driveMode: String, stackedImage: String)] {
+        if files.isEmpty { return [:] }
+        let json = try records(["-fast", "-FileName", "-DriveMode", "-StackedImage"], files: files, in: folder)
+        return try parseDriveAndStack(json: json)
+    }
+
+    static func parseDriveAndStack(json: Data) throws -> [String: (driveMode: String, stackedImage: String)] {
+        guard let records = try? JSONSerialization.jsonObject(with: json) as? [[String: Any]] else {
+            throw ExifToolError.invalidOutput
+        }
+        var result: [String: (driveMode: String, stackedImage: String)] = [:]
+        for record in records {
+            guard let fileName = record["FileName"].map({ "\($0)" }) else { continue }
+            result[fileName] = (record["DriveMode"].map { "\($0)" } ?? "", record["StackedImage"].map { "\($0)" } ?? "")
+        }
+        return result
+    }
+
     static func parseSoftware(json: Data) throws -> [String: String] {
         guard let records = try? JSONSerialization.jsonObject(with: json) as? [[String: Any]] else {
             throw ExifToolError.invalidOutput

@@ -62,6 +62,10 @@ enum CLI {
                 (try? ExifToolReader.readStackedImages(files: names, in: folder)) ?? [:]
             }
             for stack in detected.stacks {
+                let frameJPGs = FrameJPGs.find(in: folder, photos: stack.photos) { names in
+                    (try? ExifToolReader.readDriveAndStack(files: names, in: folder)) ?? [:]
+                }
+                if !frameJPGs.isEmpty { print("  JPG's van losse foto's \(stack.folderName): \(frameJPGs.count)") }
                 if let image = stackedImages[stack.photos[0].fileName] {
                     print("  stacked JPG \(stack.folderName): \(image.fileName) (\(image.imageCount) foto's)")
                 }

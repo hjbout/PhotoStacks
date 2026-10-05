@@ -59,6 +59,10 @@ naar de Prullenmand.
   mee) en gaat niet mee naar de Prullenmand als je de foto's of de hele stack weggooit. De controle draait bij het
   scannen en leest alleen de tag van de JPG's op de plek waar er een kan staan. In de CLI staat hij als
   `stacked JPG …`.
+- JPG's van losse foto's: het pijltje naast de prullenbak van een stack heeft *Alleen JPG's van losse foto's naar
+  Prullenmand…* (ook in het contextmenu). Dat zijn de JPG's die de camera naast elke foto bewaart (zelfde naam als de
+  .ORF); herkend aan de MakerNotes: Drive Mode gelijk aan die van de foto (`Focus Bracketing, Shot 3`) en Stacked Image
+  "No". De stacked JPG van de camera (Drive Mode Sequential, Stacked Image Focus-stacked) en de .ORF-bestanden blijven staan.
 - Foto's per stack: klap een stack open voor alle foto's met scherpte-balkje (rood < 25%, oranje < 50%).
   **Bekijk** of dubbelklik opent het voorbeeldvenster (←/→ bladeren). Zoomen: knijpen met twee vingers op het
   trackpad (tot 800%), ⌘+ / ⌘−, Z of klik = passend ↔ 100%. 100% is één pixel van de RAW; zodra je verder inzoomt

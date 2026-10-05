@@ -763,3 +763,25 @@ private func resultApp(_ name: String, tags: String = "", hdr: Bool = true) -> R
                                                withDestinationURL: folder.appendingPathComponent("elsewhere.JPG"))
     #expect(StackedImages.scan(folder: folder, stacks: [("a", stack)]) { _ in ["OM1R1848.JPG": 8] }.isEmpty)
 }
+
+@Test func findsOnlyTheOwnJPGsOfTheStackPhotos() throws {
+    let stack = PhotoStack(photos: (1...3).map { fb(1839 + $0, $0) })  // OM1R1840–OM1R1842
+    let folder = try makeTempFolder(files: [
+        "OM1R1840.JPG": "a", "OM1R1841.jpg": "b", "OM1R1842.JPG": "c", "OM1R1843.JPG": "stacked", "OM1R1840_NIK.JPG": "d",
+    ])
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var asked: [String] = []
+    let found = FrameJPGs.find(in: folder, photos: stack.photos) { names in
+        asked = names
+        return [
+            "OM1R1840.JPG": ("Focus Bracketing, Shot 1", "No"),
+            "OM1R1841.jpg": ("Focus Bracketing, Shot 2", "No"),
+            "OM1R1842.JPG": ("Focus Bracketing, Shot 1", "No"),  // not this photo's Drive Mode
+            "OM1R1843.JPG": ("Sequential", "Focus-stacked (3 images)"),
+        ]
+    }
+    #expect(Set(asked) == ["OM1R1840.JPG", "OM1R1841.jpg", "OM1R1842.JPG"])
+    #expect(found == ["OM1R1840.ORF": "OM1R1840.JPG", "OM1R1841.ORF": "OM1R1841.jpg"])
+    let tagged = try ExifToolReader.parseDriveAndStack(json: Data(#"[{"FileName":"a.JPG","DriveMode":"Sequential","StackedImage":"Focus-stacked (8 images)"},{"FileName":"b.JPG"}]"#.utf8))
+    #expect(tagged["a.JPG"]?.stackedImage == "Focus-stacked (8 images)" && tagged["b.JPG"]?.driveMode == "")
+}
