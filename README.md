@@ -13,6 +13,16 @@ naar de Prullenmand.
 - HDR-reeksen openen in Photomatix Pro: knop **Photomatix** per stack (RAW of, als ze er zijn, de DxO-TIFFs).
   ProCap en series hebben geen app-knop: kies de beste in het voorbeeldvenster en haal de rest uit de stack of
   stuur ze naar de Prullenmand.
+- Mapboom: links staat een boom van mappen onder een startmap die je zelf kiest (knop bovenaan de zijbalk of ⌘O;
+  een map die je op de app sleept buiten de boom wordt de nieuwe startmap). Elke map klapt apart open of dicht
+  (chevron, of → / ←); een map aanklikken analyseert hem op reeksen. Startmap en geopende mappen worden onthouden.
+  Verborgen mappen en de uitvoermappen van de app (FocusStacks, HDRStacks, ProCap, Series) staan niet in de boom.
+- Instellingen (⌘,): per rol de app die gebruikt wordt: **focusstacks** (standaard Helicon Focus), **HDR-stacks**
+  (standaard Photomatix Pro) en **resultaatfoto's** (de blauwe badge in de kolom Status; standaard DxO PhotoLab).
+  *Kies…* opent een paneel in /Applications, *Standaard* zet de oorspronkelijke app terug. De keuze wordt onthouden;
+  een gekozen app die ontbreekt wordt oranje gemeld en de knop is dan grijs. Helicon Focus krijgt de stackmap
+  als argument (het negeert "open documenten"), elke andere app krijgt de bestanden van de stack. De knop
+  *DxO PhotoLab* voor de originelen (.ORF) blijft PhotoLab.
 - Openen in Helicon Focus: knop **Helicon** per stack, of rechtsklik → *Open RAW/TIFF in Helicon Focus*.
   Dubbelklik op een stack klapt hem uit of in.
   Bestaat de stack-map al, dan worden de links geopend, anders de originelen. Een rij kan ook als map naar
@@ -20,18 +30,22 @@ naar de Prullenmand.
 - Belichting (HDR): na het scannen meet de app op de achtergrond van elke HDR-foto hoeveel procent van de
   sensorpixels over- of onderbelicht is, op de ruwe sensordata zoals FastRawViewer (niet op een gerenderd beeld).
   Overbelicht = op het sensormaximum (4094–4095), onderbelicht = meer dan 10 stops daaronder (de ruisvloer).
-  De stackregel toont **Hoog** (overbelicht in de donkerste foto) en **Schaduw** (onderbelicht in de lichtste
+  In de meetkolom toont de stackregel ☀ (overbelicht in de donkerste foto) en ☾ (onderbelicht in de lichtste
   foto): groen als de reeks het hele bereik dekt, oranje < 1%, rood daarboven. Uitgeklapt staat per foto de
-  belichting t.o.v. Shot 1 (uit sluitertijd, diafragma en ISO, dus ook in M-stand) met % over en % onder.
+  belichting t.o.v. Shot 1 (uit sluitertijd, diafragma en ISO, dus ook in M-stand) met % over en % onder; het
+  voorbeeldvenster toont hetzelfde.
   Per foto bekijken: `PhotoStacks --cli <map> --exposure`; drempels in `ExposureAnalyzer.swift`.
 - Scherpte (focus, ProCap en series; niet bij HDR, daar verschilt de belichting per foto): na het scannen meet de
-  app op de achtergrond elke stack-foto (alleen lezen) en toont in de kolom
-  **Onscherp** de foto's waarop niets scherp is; rechtsklik → *Toon onscherpe foto's in Finder*. Per vak van een
+  app op de achtergrond elke stack-foto (alleen lezen) en toont in de meetkolom hoeveel foto's **onscherp** zijn
+  (niets scherp); rechtsklik → *Toon onscherpe foto's in Finder*. Per vak van een
   24×18-raster wordt elke foto vergeleken met de scherpste foto van de stack in datzelfde vak (na aftrek van de
   ruisvloer). Haalt een foto in geen enkel detailvak 25% daarvan, dan is hij onscherp. Drempels staan in
   `SharpnessAnalyzer.swift`; per foto bekijken: `PhotoStacks --cli <map> --sharpness`.
 - Elke stack heeft een kleine thumbnail (de eerste foto van de stack); klik erop om hem groot te bekijken.
-  De kolom Scherpte toont per stack een grafiekje van de scherpte per foto. Uit- en inklappen met de chevron of
+  Scherpte en belichting delen één meetkolom (elke reeks heeft er één van); de kop volgt het soortfilter:
+  *Scherpte*, *Belichting* of *Scherpte / belichting*. Per focus-, ProCap- of seriestack staat daar een grafiekje
+  van de scherpte per foto. De kolom Status gaat over de bestanden: DxO-TIFF's, ontbrekende shots en foto's die
+  uit de stack zijn gehaald. Uit- en inklappen met de chevron of
   → / ←; ⌘O kiest een map, ⌘R scant opnieuw.
 - Foto's per stack: klap een stack open voor alle foto's met scherpte-balkje (rood < 25%, oranje < 50%).
   **Bekijk** of dubbelklik opent het voorbeeldvenster (←/→ bladeren). Zoomen: knijpen met twee vingers op het
@@ -52,6 +66,15 @@ naar de Prullenmand.
   De stack toont "TIFF x/y"; de Helicon- of Photomatix-knop krijgt een menu RAW/TIFF en opent standaard TIFF als élke foto er een
   heeft. Nieuwe exports worden opgepikt zodra je terugschakelt naar PhotoStacks. Een foto naar de Prullenmand
   neemt ook zijn DxO-TIFF(s) mee.
+- Resultaten van Helicon Focus, Photomatix Pro en Luminar Neo: staat er naast de originelen al een afbeelding die een van beide
+  programma's van de stack maakte, dan toont de kolom Status een blauwe badge **Helicon**, **Photomatix** of **Luminar Neo** (met ×n bij
+  meer afbeeldingen; de tooltip noemt de bestanden; klik op de badge om een van de afbeeldingen in DxO PhotoLab te openen). Herkend wordt aan de metadata (`ProcessingSoftware`, `Software`
+  of `CreatorTool` bevat de programmanaam; het versienummer telt niet, en Helicons tag blijft staan als DxO
+  PhotoLab het bestand opnieuw exporteert) en aan de naam: die begint met de naam van een foto uit de stack (Helicon
+  noemt het resultaat soms naar de eerste, soms naar de laatste foto). Zonder bruikbare metadata, zoals bij `.hdr` en
+  `.exr`, beslist de gebruikelijke naamgeving: `OM1R1409 11 (B,R4,S2).tif` (Helicon) en `OM1R1308_09_10_Optimizer.tif`
+  (Photomatix). Luminar Neo (alleen focus- en HDR-stacks) wordt alleen aan `Software`/`CreatorTool` "Luminar Neo" herkend, ook bij een bestand dat precies de fotonaam heeft (`_OM16524.tiff`) of er direct een letter achter krijgt (`OM1R1916neo.jpeg`); "Luminar AI" telt niet. Resultaten in submappen of met een andere naam worden niet gevonden. De controle draait op de
+  achtergrond bij het scannen en zodra je terugkeert in de app. In de CLI staan ze als `resultaat [Helicon] …`.
 - Opnieuw draaien houdt de soortmappen bij: bestaande links blijven staan, een stack-map wordt hernoemd als de
   stack veranderd is (bv. foto verwijderd), kapotte links van de app zelf (`<naam>.ORF -> ../../<naam>.ORF`
   zonder origineel) worden opgeruimd en mappen die daarna leeg zijn (op `.DS_Store` na) verdwijnen.

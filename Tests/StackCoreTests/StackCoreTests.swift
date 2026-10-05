@@ -572,6 +572,103 @@ private func plainRaw(_ values: [UInt16], offset: Int = 4) -> Data {
     #expect(ExposureAnalyzer.relativeEV(of: stack.photos[2], in: stack, stats: stats) == 5.0 / 3)
 }
 
+@Test func bracketSpanAndSceneRange() {
+    let stack = PhotoStack(photos: [photo(1, "AE Bracketing, Shot 1"), photo(2, "AE Bracketing, Shot 2"),
+                                    photo(3, "AE Bracketing, Shot 3")])
+    func histogram(_ stops: [Int: Double]) -> [Double] {
+        (0..<ExposureAnalyzer.histogramStops).map { stops[$0] ?? 0 }
+    }
+    var stats = [
+        // Darkest frame (−2): brightest content 1 stop below its maximum.
+        "OM1R1.ORF": ExposureStats(over: 0, under: 0.5, exposure: 3, stopHistogram: histogram([1: 0.5, 5: 0.5])),
+        "OM1R2.ORF": ExposureStats(over: 0, under: 0.3, exposure: 5, stopHistogram: histogram([0: 0.1, 4: 0.9])),
+    ]
+    #expect(ExposureAnalyzer.bracketSpan(of: stack, stats: stats) == nil)
+    stats["OM1R3.ORF"] = ExposureStats(over: 0.1, under: 0, exposure: 7, stopHistogram: histogram([0: 0.1, 8: 0.9, 13: 0.0001]))
+    #expect(ExposureAnalyzer.bracketSpan(of: stack, stats: stats) == 4)
+    // 4 stops of bracket + (darkest content of the brightest frame: stop 8) − (brightest content of the darkest: stop 1).
+    #expect(ExposureAnalyzer.sceneRange(of: stack, stats: stats) == 11)
+}
+
+@Test func histogramCountsStopsBelowMaximum() {
+    // 4 pixels: at the maximum (stop 0), one stop below, 3 stops below, and at black.
+    let values: [UInt16] = [4095, 2048, 512, 0]
+    var data = Data()
+    for v in values { data.append(UInt8(v & 0xff)); data.append(UInt8(v >> 8)) }
+    let l = RawLayout(offset: 0, byteCount: 8, width: 2, height: 2, black: [0, 0, 0, 0], white: 4095,
+                      cropLeft: 0, cropTop: 0, cropWidth: 2, cropHeight: 2, exposure: nil)
+    let h = ExposureAnalyzer.stats(of: data, layout: l)?.stopHistogram ?? []
+    #expect(h.count == ExposureAnalyzer.histogramStops)
+    #expect(h[0] == 0.25 && h[1] == 0.25 && h[3] == 0.25 && h[ExposureAnalyzer.histogramStops - 1] == 0.25)
+}
+
+/// Which program (if any) made a file, given its name and software tags, for a stack of three photos from 1308 or a
+/// focus stack of four photos from 1779.
+private func resultApp(_ name: String, tags: String = "", hdr: Bool = true) -> ResultApp? {
+    let stack = hdr
+        ? PhotoStack(photos: (1308...1310).map { photo($0, "AE Bracketing, Shot \($0 - 1307)") })
+        : PhotoStack(photos: (1779...1782).map { photo($0, "Focus Bracketing, Shot \($0 - 1778)") })
+    guard let candidate = StackResults.candidates(names: [name], stacks: [stack]).first else { return nil }
+    return StackResults.resolve(candidate.nameApp, tags: tags, kind: stack.kind)
+}
+
+@Test func recognisesPhotomatixResultsByName() {
+    #expect(resultApp("OM1R1308_09_10_Optimizer.tif") == .photomatix)
+    #expect(resultApp("OM1R1308_09_10.hdr") == .photomatix)
+    #expect(resultApp("OM1R1308_09.exr") == .photomatix)  // a subset of the stack
+    #expect(resultApp("OM1R1308_09_11_Optimizer.tif") == nil)  // 1311 isn't in the stack
+    #expect(resultApp("OM1R1308_Enhancer.tif") == nil)  // one photo, no tags: not recognisable by name
+    #expect(resultApp("OM1R1308.tif") == nil)  // DxO export (no tags)
+    #expect(resultApp("OM1R1308_DxOVP.tiff") == nil)
+    #expect(resultApp("OM1R13080_09_10.tif") == nil)  // another photo
+    #expect(resultApp("OM1R1308_09_10_Optimizer.on1") == nil)  // sidecar
+}
+
+@Test func recognisesHeliconResultsByName() {
+    #expect(resultApp("OM1R1779 4 (B,R4,S2).tif", hdr: false) == .helicon)
+    #expect(resultApp("OM1R1782 4 (C,S1).tif", hdr: false) == .helicon)  // named after the last photo
+    #expect(resultApp("OM1R1779_openWith (B,R3,S3).jpg", hdr: false) == .helicon)
+    #expect(resultApp("OM1R1779 3.tif", hdr: false) == .helicon)  // only the number of photos
+    #expect(resultApp("OM1R1779 5.tif", hdr: false) == nil)  // more photos than the stack has
+    #expect(resultApp("OM1R1779 1.tif", hdr: false) == nil)
+    #expect(resultApp("OM1R1779 copy.tif", hdr: false) == nil)
+    #expect(resultApp("OM1R1779_DxO.tif", hdr: false) == nil)
+    #expect(resultApp("OM1R1779 4 (B,R4,S2).tif") == nil)  // an HDR stack has no Helicon naming
+}
+
+@Test func recognisesResultsByProgramNameInTheTags() {
+    #expect(resultApp("OM1R1779 final.tif", tags: "Helicon Focus 9.0.7 Mac", hdr: false) == .helicon)
+    // The version doesn't matter, and ProcessingSoftware survives a re-export by DxO PhotoLab.
+    #expect(resultApp("OM1R1779 final.tif", tags: "Helicon Focus 8.3.7 (Mac) DxO PhotoLab 10.1.0", hdr: false) == .helicon)
+    #expect(resultApp("OM1R1308_Enhancer.tif", tags: "Photomatix Pro 7.1.4") == .photomatix)
+    #expect(resultApp("OM1R1308_Enhancer.tif", tags: "DxO PhotoLab 10.1.0") == nil)
+    // The tags win over the name.
+    #expect(resultApp("OM1R1308_09_10_x.tif", tags: "Helicon Focus 9.0.7 Mac") == .helicon)
+    // Both programs named: the one for this kind of stack.
+    #expect(resultApp("OM1R1308_x.tif", tags: "Helicon Focus 9.0.7 Mac Photomatix Pro 7.1.4") == .photomatix)
+    #expect(resultApp("OM1R1779_x.tif", tags: "Helicon Focus 9.0.7 Mac Photomatix Pro 7.1.4", hdr: false) == .helicon)
+}
+
+@Test func recognisesLuminarNeoByTagsOnly() {
+    #expect(resultApp("OM1R1308.tif", tags: "Luminar Neo Luminar Neo") == .luminar)  // named exactly like the photo
+    #expect(resultApp("OM1R1308neo.jpeg", tags: "Luminar Neo") == .luminar)
+    #expect(resultApp("OM1R1779_stack.tiff", tags: "Luminar Neo", hdr: false) == .luminar)
+    #expect(resultApp("OM1R1308.tif", tags: "Luminar AI") == nil)
+    #expect(resultApp("OM1R1308.tif", tags: "DxO PhotoLab 10.1.0") == nil)
+    #expect(resultApp("OM1R1308neo.jpeg") == nil)  // without tags the name says nothing
+    #expect(resultApp("OM13080.tif", tags: "Luminar Neo") == nil)  // another photo
+}
+
+@Test func parsesSoftwareTagsFromExifTool() throws {
+    let json = """
+    [{"SourceFile": "a.tif", "FileName": "a.tif", "ProcessingSoftware": "Helicon Focus 9.0.7 Mac", "Software": "DxO PhotoLab 10.1.0"},
+     {"SourceFile": "b.hdr", "FileName": "b.hdr"}]
+    """
+    let tags = try ExifToolReader.parseSoftware(json: Data(json.utf8))
+    #expect(tags["a.tif"] == "Helicon Focus 9.0.7 Mac DxO PhotoLab 10.1.0")
+    #expect(tags["b.hdr"] == "")
+}
+
 @Test func parsesRawLayoutFromExifTool() throws {
     let json = """
     [{"SourceFile": "OM1R1342.ORF", "FileName": "OM1R1342.ORF", "StripOffsets": 1457122, "StripByteCounts": 15558024,

@@ -82,7 +82,13 @@ final class AppModel {
         case idle, scanning, scanned, writing, done
     }
 
+    /// The folder that is analysed for stacks.
     var folder: URL?
+    /// Top of the folder tree in the sidebar, and the folders (by standardised path) that are expanded in it.
+    var rootFolder: URL?
+    var expandedFolders = Set<String>()
+    /// Sub folders of the root and of every expanded folder, by standardised path.
+    var folderChildren: [String: [URL]] = [:]
     var phase: Phase = .idle
     var result: DetectionResult?
     var entries: [StackEntry] = []
@@ -112,6 +118,8 @@ final class AppModel {
     private var exposureToken: CancellationToken?
 
     var preview: PreviewTarget?
+    /// Bumped on every request to show the viewer, so the window comes forward even for the photo it already shows.
+    var previewRequests = 0
     var zoomCommand = ZoomCommand()
     /// Current zoom of the preview (1 = 100% = one RAW pixel per screen pixel) and whether it is fitted.
     var previewMagnification = 0.0
@@ -124,14 +132,23 @@ final class AppModel {
     var trashRequest: TrashRequest?
     /// Small pictures for the stack rows (the camera's embedded thumbnail).
     var thumbnails: [String: NSImage] = [:]
+    /// Larger pictures for the hover window (kept small: dropped when it grows).
+    var hoverImages: [String: NSImage] = [:]
     /// DxO TIFF exports per photo (newest first), refreshed when the app becomes active again.
     var tiffIndex: [String: [TIFFFile]] = [:]
+    /// Images that Helicon Focus / Photomatix Pro made of each stack (keyed by `StackEntry.key`), refreshed together
+    /// with the DxO TIFFs.
+    var resultIndex: [String: [StackResult]] = [:]
+    private let softwareCache = SoftwareTagCache()
+    private var resultsGeneration = 0
 
     /// Link updates run one after another.
     private let syncQueue = DispatchQueue(label: "PhotoStacks.sync")
 
-    let heliconURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.heliconsoft.heliconfocus")
-    let photomatixURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.hdrsoft.PhotomatixPro")
+    /// Apps chosen in the settings; a role without an entry uses its default (see `AppRole`).
+    var chosenApps: [AppRole: ChosenApp] = AppModel.loadChosenApps()
+    /// The apps of the roles that are installed, see `refreshApps()`.
+    var apps: [AppRole: ResolvedApp] = [:]
 
     /// The output folders (FocusStacks, HDRStacks …) that exist.
     var outputFolders: [URL] {
@@ -169,8 +186,14 @@ final class AppModel {
         // Back from DxO PhotoLab: pick up new TIFF exports (only a directory listing).
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
                                                queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshTIFFs() }
+            MainActor.assumeIsolated {
+                self?.refreshTIFFs()
+                self?.refreshResults()
+                self?.refreshApps()
+            }
         }
+        refreshApps()
+        restoreTree()
     }
 
     func entry(_ key: String) -> StackEntry? {
@@ -179,24 +202,37 @@ final class AppModel {
 
     // MARK: - Folder and scanning
 
+    /// Asks for the top folder of the tree and analyses it.
     func chooseFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Kies"
-        panel.message = "Kies de map met .ORF-bestanden"
+        panel.message = "Kies de startmap van de mapboom"
         if panel.runModal() == .OK, let url = panel.url {
-            open(url)
+            setRoot(url)
+            selectFolder(url)
         }
     }
 
+    /// A folder from outside the tree (dropped, "Open With", the sidebar): inside the tree it is selected there,
+    /// elsewhere it becomes the new top of the tree.
     func open(_ url: URL) {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             errorMessage = "\(url.lastPathComponent) is geen map."
             return
         }
+        if isInsideTree(url) {
+            expandAncestors(of: url)
+        } else {
+            setRoot(url)
+        }
+        selectFolder(url)
+    }
+
+    private func selectFolder(_ url: URL) {
         folder = url
         scan()
         showMainWindow()
@@ -210,6 +246,7 @@ final class AppModel {
 
     func scan() {
         guard let folder else { return }
+        refreshTree()
         phase = .scanning
         selection = []
         expanded = []
@@ -227,7 +264,9 @@ final class AppModel {
         result = nil
         entries = []
         tiffIndex = [:]
+        resultIndex = [:]
         thumbnails = [:]
+        hoverImages = [:]
         report = nil
         errorMessage = nil
         Task.detached {
@@ -253,6 +292,7 @@ final class AppModel {
         if let kindFilter, !entries.contains(where: { $0.detected.kind == kindFilter }) { self.kindFilter = nil }
         recompute()
         phase = .scanned
+        refreshResults()
         measureSharpness(of: result.stacks, in: folder)
         measureExposure(of: result.stacks, in: folder)
     }
@@ -298,12 +338,60 @@ final class AppModel {
         thumbnails[photo.fileName] = image
     }
 
+    /// A larger picture (the camera's embedded preview) for the floating window that follows the pointer.
+    func loadHoverImage(of photo: PhotoInfo) async -> NSImage? {
+        if let cached = hoverImages[photo.fileName] { return cached }
+        guard let folder else { return nil }
+        let url = folder.appendingPathComponent(photo.fileName)
+        let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1440,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+            ]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        }.value
+        guard folder == self.folder, let image else { return nil }
+        if hoverImages.count >= 40 { hoverImages = [:] }
+        hoverImages[photo.fileName] = image
+        return image
+    }
+
     // MARK: - DxO TIFFs
 
     func refreshTIFFs() {
         guard let folder, !entries.isEmpty else { return }
         let updated = DxOExports.scan(folder: folder, photos: entries.flatMap(\.detected.photos))
         if updated != tiffIndex { tiffIndex = updated }
+    }
+
+    /// Looks for images made by Helicon or Photomatix (directory listing, plus exiftool for files not read before),
+    /// in the background.
+    func refreshResults() {
+        guard let folder, !entries.isEmpty else { return }
+        let stacks = entries.map { (key: $0.key, stack: $0.detected) }
+        let cache = softwareCache
+        resultsGeneration += 1
+        let generation = resultsGeneration
+        Task.detached(priority: .utility) {
+            let index = StackResults.scan(folder: folder, stacks: stacks) { names in
+                cache.tags(for: names, in: folder) { files in
+                    (try? ExifToolReader.readSoftware(files: files, in: folder)) ?? [:]
+                }
+            }
+            await self.applyResults(index, for: folder, generation: generation)
+        }
+    }
+
+    private func applyResults(_ index: [String: [StackResult]], for folder: URL, generation: Int) {
+        guard folder == self.folder, generation == resultsGeneration, index != resultIndex else { return }
+        resultIndex = index
+    }
+
+    func results(for entry: StackEntry) -> [StackResult] {
+        resultIndex[entry.key] ?? []
     }
 
     /// Newest DxO TIFF per photo, as LinkWriter wants it.
@@ -374,14 +462,25 @@ final class AppModel {
             ? url : nil
     }
 
-    // MARK: - Helicon and Finder
+    // MARK: - Opening stacks and Finder
 
-    /// Opens the stack in Helicon Focus: the RAW links in its stack folder or the TIFF links in its TIFF subfolder.
-    /// FocusStacks is brought up to date first (so new DxO exports are included). Helicon ignores macOS "open
-    /// documents" requests, but loads all images of a folder passed as command line argument; a new instance is
-    /// started so this also works while Helicon is already open (each stack gets its own Helicon window).
-    func openInHelicon(_ stack: PhotoStack, kind: SourceKind) {
-        guard let heliconURL, let folder else { return }
+    /// Opens the stack in the app chosen for its kind (Helicon Focus for focus stacks and Photomatix Pro for HDR
+    /// stacks, unless the settings say otherwise): the RAW files or the newest DxO TIFF of each photo.
+    func openStack(_ stack: PhotoStack, kind: SourceKind) {
+        guard let role = AppRole(stackKind: stack.kind), let app = apps[role] else { return }
+        if app.loadsFolderArgument {
+            openStackFolder(stack, kind: kind, in: app)
+        } else {
+            openStackFiles(stack, kind: kind, in: app)
+        }
+    }
+
+    /// Opens the links in the stack's folder (or its TIFF subfolder), for Helicon Focus. FocusStacks is brought up to
+    /// date first (so new DxO exports are included). Helicon ignores macOS "open documents" requests, but loads all
+    /// images of a folder passed as command line argument; a new instance is started so this also works while
+    /// Helicon is already open (each stack gets its own Helicon window).
+    private func openStackFolder(_ stack: PhotoStack, kind: SourceKind, in app: ResolvedApp) {
+        guard let folder else { return }
         let outputFolder = LinkWriter.outputFolder(for: folder, kind: stack.kind)
         refreshTIFFs()
         let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
@@ -400,19 +499,19 @@ final class AppModel {
                 configuration.arguments = [target.path]
                 configuration.createsNewApplicationInstance = true
                 configuration.activates = true
-                NSWorkspace.shared.openApplication(at: heliconURL, configuration: configuration) { _, error in
+                NSWorkspace.shared.openApplication(at: app.url, configuration: configuration) { _, error in
                     guard let error else { return }
                     Task { @MainActor in
-                        self.alertMessage = "Openen in Helicon Focus mislukt: \(error.localizedDescription)"
+                        self.alertMessage = "Openen in \(app.name) mislukt: \(error.localizedDescription)"
                     }
                 }
             }
         }
     }
 
-    /// Opens the stack's originals, or the newest DxO TIFF of each photo, in Photomatix Pro (which merges them).
-    func openInPhotomatix(_ stack: PhotoStack, kind: SourceKind) {
-        guard let photomatixURL, let folder else { return }
+    /// Opens the stack's originals, or the newest DxO TIFF of each photo, as documents (Photomatix Pro merges them).
+    private func openStackFiles(_ stack: PhotoStack, kind: SourceKind, in app: ResolvedApp) {
+        guard let folder else { return }
         refreshTIFFs()
         let names = kind == .tiff ? stack.photos.compactMap { tiff(for: $0)?.fileName } : stack.photos.map(\.fileName)
         let urls = names.map { folder.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -420,10 +519,10 @@ final class AppModel {
             alertMessage = "De bestanden van \(stack.folderName) zijn niet (meer) gevonden."
             return
         }
-        NSWorkspace.shared.open(urls, withApplicationAt: photomatixURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+        NSWorkspace.shared.open(urls, withApplicationAt: app.url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
             guard let error else { return }
             Task { @MainActor in
-                self.alertMessage = "Openen in Photomatix Pro mislukt: \(error.localizedDescription)"
+                self.alertMessage = "Openen in \(app.name) mislukt: \(error.localizedDescription)"
             }
         }
     }
@@ -441,16 +540,28 @@ final class AppModel {
     /// Returns false when nothing was opened.
     @discardableResult
     func openInPhotoLab(_ photo: PhotoInfo) -> Bool {
-        guard let photoLabURL, let folder else { return false }
-        let url = folder.appendingPathComponent(photo.fileName)
+        guard let photoLabURL else { return false }
+        return open(fileName: photo.fileName, with: photoLabURL, appName: "DxO PhotoLab")
+    }
+
+    /// Opens a result of Helicon, Photomatix or Luminar (a file of the scanned folder) in the app chosen for results.
+    @discardableResult
+    func openResult(fileName: String) -> Bool {
+        guard let app = apps[.result] else { return false }
+        return open(fileName: fileName, with: app.url, appName: app.name)
+    }
+
+    private func open(fileName: String, with appURL: URL, appName: String) -> Bool {
+        guard let folder else { return false }
+        let url = folder.appendingPathComponent(fileName)
         guard FileManager.default.fileExists(atPath: url.path) else {
-            alertMessage = "\(photo.fileName) is niet (meer) gevonden."
+            alertMessage = "\(fileName) is niet (meer) gevonden."
             return false
         }
-        NSWorkspace.shared.open([url], withApplicationAt: photoLabURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
             guard let error else { return }
             Task { @MainActor in
-                self.alertMessage = "Openen in DxO PhotoLab mislukt: \(error.localizedDescription)"
+                self.alertMessage = "Openen in \(appName) mislukt: \(error.localizedDescription)"
             }
         }
         return true
@@ -469,6 +580,13 @@ final class AppModel {
             NSWorkspace.shared.activateFileViewerSelecting(
                 entry.detected.photos.map { folder.appendingPathComponent($0.fileName) })
         }
+    }
+
+    /// Selects the original .ORF files of the stack in the Finder (not the links in the stack folder).
+    func revealOriginals(_ entry: StackEntry) {
+        guard let folder else { return }
+        let photos = (entry.active ?? entry.detected).photos
+        NSWorkspace.shared.activateFileViewerSelecting(photos.map { folder.appendingPathComponent($0.fileName) })
     }
 
     func reveal(_ photo: PhotoInfo) {
@@ -636,6 +754,7 @@ final class AppModel {
 
     func showPreview(_ photo: PhotoInfo, entryKey: String) {
         preview = PreviewTarget(entryKey: entryKey, fileName: photo.fileName)
+        previewRequests += 1
     }
 
     func closePreview() {
@@ -832,7 +951,7 @@ final class AppModel {
 
     /// Measures how much of each HDR photo is clipped, in the background; only reads the originals.
     private func measureExposure(of stacks: [PhotoStack], in folder: URL) {
-        let photos = stacks.filter { $0.kind == .hdr }.flatMap(\.photos)
+        let photos = stacks.filter(\.kind.measuresExposure).flatMap(\.photos)
         guard !photos.isEmpty else { return }
         let token = CancellationToken()
         exposureToken = token
@@ -866,6 +985,11 @@ final class AppModel {
     }
 
     /// Exposure of a photo in stops relative to the first photo of its stack.
+    /// Dynamic range in stops that the stack captures, once all its frames are measured.
+    func sceneRange(_ entry: StackEntry) -> Double? {
+        entry.active.flatMap { ExposureAnalyzer.sceneRange(of: $0, stats: exposure) }
+    }
+
     func relativeEV(of photo: PhotoInfo, entryKey: String) -> Double? {
         entry(entryKey).flatMap { ExposureAnalyzer.relativeEV(of: photo, in: $0.detected, stats: exposure) }
     }

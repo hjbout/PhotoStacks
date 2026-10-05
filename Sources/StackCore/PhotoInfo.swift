@@ -51,6 +51,9 @@ public enum StackKind: String, CaseIterable, Sendable, Hashable {
     /// Comparing sharpness within the sequence makes sense (not for HDR: the exposure differs per frame).
     public var measuresSharpness: Bool { self != .hdr }
 
+    /// Over- and underexposure is what matters for HDR; every kind measures either this or sharpness.
+    public var measuresExposure: Bool { self == .hdr }
+
     /// Missing shot numbers mean deleted photos (bursts are usually thinned out, so there gaps are normal).
     public var reportsMissingShots: Bool { self == .focus || self == .hdr }
 }

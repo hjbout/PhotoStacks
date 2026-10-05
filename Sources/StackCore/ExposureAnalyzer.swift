@@ -42,11 +42,15 @@ public struct ExposureStats: Sendable, Equatable {
     public let under: Double
     /// log2(time × ISO / aperture²) of the shot, see `ExposureAnalyzer.relativeEV`.
     public let exposure: Double?
+    /// Fraction of the sensor pixels per stop below the sensor's maximum (index 0: the brightest stop, the last
+    /// index also holds everything darker). Empty when not measured.
+    public let stopHistogram: [Double]
 
-    public init(over: Double, under: Double, exposure: Double?) {
+    public init(over: Double, under: Double, exposure: Double?, stopHistogram: [Double] = []) {
         self.over = over
         self.under = under
         self.exposure = exposure
+        self.stopHistogram = stopHistogram
     }
 }
 
@@ -58,6 +62,10 @@ public enum ExposureAnalyzer {
     public static let underexposureStops = 10
     /// Overexposed: within this many values of the sensor's maximum.
     public static let clipMargin = 1
+    /// Number of stops in `ExposureStats.stopHistogram`.
+    public static let histogramStops = 16
+    /// A stop counts as part of the scene when at least this fraction of the pixels falls in it.
+    public static let sceneStopFraction = 0.001
 
     /// Over- and underexposure of one file, nil when its sensor data can't be read.
     public static func stats(of url: URL, layout: RawLayout) -> ExposureStats? {
@@ -83,7 +91,8 @@ public enum ExposureAnalyzer {
         }
         guard ok, counter.total > 0 else { return nil }
         return ExposureStats(over: Double(counter.over) / Double(counter.total),
-                             under: Double(counter.under) / Double(counter.total), exposure: l.exposure)
+                             under: Double(counter.under) / Double(counter.total), exposure: l.exposure,
+                             stopHistogram: counter.histogram.map { Double($0) / Double(counter.total) })
     }
 
     /// Stats of the given photos (keyed by file name), measured in parallel. Photos that can't be read are left out.
@@ -119,6 +128,26 @@ public enum ExposureAnalyzer {
         return (highlights, shadows)
     }
 
+    /// Exposure difference in stops between the brightest and darkest frame of the bracket, e.g. 4 for −2…+2.
+    public static func bracketSpan(of stack: PhotoStack, stats: [String: ExposureStats]) -> Double? {
+        let exposures = stack.photos.compactMap { stats[$0.fileName]?.exposure }
+        guard exposures.count == stack.photos.count, let low = exposures.min(), let high = exposures.max() else { return nil }
+        return ((high - low) * 3).rounded() / 3
+    }
+
+    /// Dynamic range in stops that the bracket captures of the scene: from the brightest content of its darkest
+    /// frame to the darkest content above the noise floor of its brightest frame. Nil when not (fully) measured.
+    public static func sceneRange(of stack: PhotoStack, stats: [String: ExposureStats]) -> Double? {
+        let frames = stack.photos.compactMap { photo in stats[photo.fileName].flatMap { s in s.exposure.map { ($0, s) } } }
+        guard !frames.isEmpty, frames.count == stack.photos.count,
+              let darkest = frames.min(by: { $0.0 < $1.0 }), let brightest = frames.max(by: { $0.0 < $1.0 }),
+              darkest.1.stopHistogram.count == histogramStops, brightest.1.stopHistogram.count == histogramStops,
+              let top = darkest.1.stopHistogram.firstIndex(where: { $0 >= sceneStopFraction }),
+              let bottom = brightest.1.stopHistogram.prefix(underexposureStops + 1).lastIndex(where: { $0 >= sceneStopFraction })
+        else { return nil }
+        return (brightest.0 - darkest.0) + Double(bottom - top)
+    }
+
     /// Exposure of `photo` in stops relative to the first photo of `stack` (the camera's base exposure), e.g. −2.
     /// Uses shutter, aperture and ISO, so it also works in manual mode, where the exposure compensation stays 0.
     public static func relativeEV(of photo: PhotoInfo, in stack: PhotoStack, stats: [String: ExposureStats]) -> Double? {
@@ -136,12 +165,16 @@ public enum ExposureAnalyzer {
         let overLimit: Int
         /// Per colour filter position: values below this are underexposed.
         let underLimit: [Int]
+        /// Per colour filter position: log2 of the usable range (white − black), to bin values by stop.
+        let rangeLog: [Int]
         var over = 0
         var under = 0
         var total = 0
+        var histogram = [Int](repeating: 0, count: ExposureAnalyzer.histogramStops)
 
         init(layout: RawLayout) {
             self.layout = layout
+            rangeLog = layout.black.map { Int.bitWidth - 1 - max(layout.white - $0, 1).leadingZeroBitCount }
             overLimit = layout.white - ExposureAnalyzer.clipMargin
             underLimit = layout.black.map { black in
                 // Integer values below black + range / 2^stops (rounded up).
@@ -155,10 +188,15 @@ public enum ExposureAnalyzer {
             guard row >= layout.cropTop, row < layout.cropTop + layout.cropHeight else { return }
             let colourRow = (row & 1) * 2
             let limit0 = underLimit[colourRow], limit1 = underLimit[colourRow + 1]
+            let last = ExposureAnalyzer.histogramStops - 1
             for col in layout.cropLeft..<(layout.cropLeft + layout.cropWidth) {
                 let value = Int(values[col])
+                let colour = colourRow + (col & 1)
                 if value >= overLimit { over += 1 }
                 if value < ((col & 1) == 0 ? limit0 : limit1) { under += 1 }
+                let level = max(value - layout.black[colour], 1)
+                let stop = rangeLog[colour] - (Int.bitWidth - 1 - level.leadingZeroBitCount)
+                histogram[min(max(stop, 0), last)] += 1
             }
             total += layout.cropWidth
         }

@@ -43,15 +43,21 @@ public enum DxOExports {
     static func photo(for tiffName: String, stems: [String: String]) -> String? {
         let base = (tiffName.lowercased() as NSString).deletingPathExtension
         if let photo = stems[base] { return photo }
-        var best: (stem: String, photo: String)?
+        guard let best = leadingStem(of: base, in: stems), base.dropFirst(best.stem.count).contains("dxo") else { return nil }
+        return best.value
+    }
+
+    /// The longest photo stem that `base` (a lowercased name without extension) starts with, followed by a
+    /// separator (not a letter or digit, so OM1R58550 doesn't belong to OM1R5855).
+    static func leadingStem<Value>(of base: String, in stems: [String: Value]) -> (stem: String, value: Value)? {
+        var best: (stem: String, value: Value)?
         // Possible ends of the photo name: every separator after the first character.
         for (offset, character) in base.enumerated() where offset > 0 && !(character.isLetter || character.isNumber) {
             let stem = String(base.prefix(offset))
-            if let photo = stems[stem], stem.count > (best?.stem.count ?? 0) {
-                best = (stem, photo)
+            if let value = stems[stem], stem.count > (best?.stem.count ?? 0) {
+                best = (stem, value)
             }
         }
-        guard let best, base.dropFirst(best.stem.count).contains("dxo") else { return nil }
-        return best.photo
+        return best
     }
 }

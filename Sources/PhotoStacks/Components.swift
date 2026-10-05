@@ -22,8 +22,6 @@ struct DisclosureChevron: View {
     }
 }
 
-/// Small coloured label with an optional icon. On a selected (highlighted) row it turns white, like other
-/// content of the row, so it stays readable on the accent colour.
 /// Formatting of exposure measurements.
 enum ExposureFormat {
     /// "0,04%" below 1%, otherwise "6,9%".
@@ -44,6 +42,65 @@ enum ExposureFormat {
     }
 }
 
+/// Rounded grey background behind an icon button, like the buttons in the Finder toolbar.
+struct PillBackground: ViewModifier {
+    let width: CGFloat
+    @Environment(\.backgroundProminence) private var prominence
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: width, height: 24)
+            .background(prominence == .increased ? Color.white.opacity(0.22) : Color.secondary.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+extension View {
+    /// Wraps an icon (or menu) in a fixed-size rounded grey button background.
+    func pill(width: CGFloat = ContentView.pillWidth) -> some View {
+        modifier(PillBackground(width: width))
+    }
+}
+
+/// Icon button with a small chevron menu next to it, in one rounded grey background.
+struct SplitIconButton<Icon: View, Items: View>: View {
+    let action: () -> Void
+    let icon: Icon
+    let items: Items
+
+    init(action: @escaping () -> Void, @ViewBuilder icon: () -> Icon, @ViewBuilder items: () -> Items) {
+        self.action = action
+        self.icon = icon()
+        self.items = items()
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: action) {
+                icon
+                    .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Menu {
+                items
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+        .pill()
+    }
+}
+
+/// Small coloured label with an optional icon. On a selected (highlighted) row it turns white, like other
+/// content of the row, so it stays readable on the accent colour.
 struct Badge: View {
     let text: String
     var systemImage: String?
@@ -67,6 +124,96 @@ struct Badge: View {
         .foregroundStyle(isOnSelection ? Color.white : tint)
         .background(isOnSelection ? Color.white.opacity(0.22) : tint.opacity(0.13), in: Capsule())
         .fixedSize()
+    }
+}
+
+/// Exposure of one HDR photo, relative to the first of its stack, and how much of it is clipped.
+struct ExposureBadges: View {
+    let stats: ExposureStats
+    let ev: Double?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let ev {
+                Text(ExposureFormat.ev(ev))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(minWidth: 52, alignment: .trailing)
+            }
+            Badge(text: ExposureFormat.percent(stats.over), systemImage: "sun.max", tint: ExposureFormat.tint(stats.over))
+                .help("Overbelicht: \(ExposureFormat.percent(stats.over)) van de sensorpixels zit op het maximum.")
+            Badge(text: ExposureFormat.percent(stats.under), systemImage: "moon", tint: ExposureFormat.tint(stats.under))
+                .help("Onderbelicht: \(ExposureFormat.percent(stats.under)) van de sensorpixels is meer dan "
+                    + "\(ExposureAnalyzer.underexposureStops) stops donkerder dan het maximum.")
+        }
+    }
+}
+
+/// "Helicon" / "Photomatix" / "Luminar Neo": the stack already has images made by that program (found next to the
+/// originals). Clicking the badge lists them, to open one in the app chosen for results (DxO PhotoLab by default).
+struct ResultBadges: View {
+    let results: [StackResult]
+    let appName: String
+    let canOpen: Bool
+    let open: (String) -> Void
+
+    var body: some View {
+        ForEach(ResultApp.allCases, id: \.self) { app in
+            let files = results.filter { $0.app == app }
+            if !files.isEmpty {
+                let images = files.filter { !$0.isIntermediate }
+                let programName = app == .helicon ? "Helicon Focus" : app == .photomatix ? "Photomatix Pro" : "Luminar Neo"
+                let icon = app == .helicon ? "camera.macro" : app == .photomatix ? "circle.lefthalf.filled" : "sparkles"
+                let badge = Badge(text: images.count > 1 ? "\(app.displayName) ×\(images.count)" : app.displayName,
+                                  systemImage: icon, tint: .blue)
+                let names = files.map(\.fileName).joined(separator: "\n")
+                if images.isEmpty {
+                    // Only .hdr / .exr: PhotoLab can't open those.
+                    badge.help("Alleen een tussenresultaat (.hdr/.exr) van \(programName) gevonden:\n" + names)
+                } else {
+                    Menu {
+                        Section("Open in \(appName)") {
+                            ForEach(images, id: \.fileName) { image in
+                                Button(image.fileName) { open(image.fileName) }
+                                    .disabled(!canOpen)
+                            }
+                        }
+                    } label: {
+                        badge
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Resultaat van \(programName) gevonden (nieuwste eerst), klik om er een in \(appName) te openen:\n" + names)
+                }
+            }
+        }
+    }
+}
+
+/// How well an HDR bracket covers the scene: clipped highlights in its darkest frame, lost shadows in its
+/// brightest frame.
+struct ExposureCoverageBadges: View {
+    let highlights: Double
+    let shadows: Double
+    var range: Double?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let range {
+                Badge(text: String(format: "%.1f stops", range), systemImage: "slider.horizontal.3", tint: .secondary)
+                    .help("Dynamisch bereik dat de reeks van het onderwerp vastlegt, gemeten op de sensordata: het verschil "
+                        + "tussen de lichtste inhoud van de donkerste foto en de donkerste inhoud (boven de ruisvloer) van de lichtste foto.")
+            }
+            Badge(text: ExposureFormat.percent(highlights), systemImage: "sun.max", tint: ExposureFormat.tint(highlights))
+                .help("Hooglichten: in de donkerste foto zit \(ExposureFormat.percent(highlights)) van de sensorpixels "
+                    + "op het maximum. Groen: de reeks houdt alle hooglichten.")
+            Badge(text: ExposureFormat.percent(shadows), systemImage: "moon", tint: ExposureFormat.tint(shadows))
+                .help("Schaduwen: in de lichtste foto is \(ExposureFormat.percent(shadows)) van de sensorpixels meer dan "
+                    + "\(ExposureAnalyzer.underexposureStops) stops donkerder dan het maximum. Groen: de reeks houdt alle schaduwen.")
+        }
     }
 }
 

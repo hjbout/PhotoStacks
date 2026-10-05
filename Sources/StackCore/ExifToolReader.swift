@@ -58,6 +58,28 @@ public enum ExifToolReader {
         return try parseRawLayouts(json: json)
     }
 
+    /// The software that wrote each file, as the text of its `ProcessingSoftware`, `Software` and `CreatorTool` tags
+    /// (Helicon Focus puts its name in ProcessingSoftware, Photomatix Pro in Software). Files without them give "".
+    public static func readSoftware(files: [String], in folder: URL) throws -> [String: String] {
+        if files.isEmpty { return [:] }
+        let json = try records(["-FileName", "-ProcessingSoftware", "-Software", "-CreatorTool"], files: files, in: folder)
+        return try parseSoftware(json: json)
+    }
+
+    static func parseSoftware(json: Data) throws -> [String: String] {
+        guard let records = try? JSONSerialization.jsonObject(with: json) as? [[String: Any]] else {
+            throw ExifToolError.invalidOutput
+        }
+        var result: [String: String] = [:]
+        for record in records {
+            guard let fileName = record["FileName"].map({ "\($0)" }) else { continue }
+            result[fileName] = ["ProcessingSoftware", "Software", "CreatorTool"]
+                .compactMap { record[$0].map { "\($0)" } }
+                .joined(separator: " ")
+        }
+        return result
+    }
+
     /// exiftool's JSON output for `files` (names relative to `folder`) with the given tag arguments.
     private static func records(_ tags: [String], files: [String], in folder: URL) throws -> Data {
         guard let exiftool = locate() else { throw ExifToolError.notFound }

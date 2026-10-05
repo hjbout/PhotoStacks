@@ -14,6 +14,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// ⌘` / ⇧⌘`: brings the backmost (or second) window of the app to the front, like the system does.
+@MainActor
+enum WindowCycler {
+    static func cycle(forward: Bool) {
+        let windows = NSApp.orderedWindows.filter { $0.isVisible && $0.canBecomeKey && !$0.isMiniaturized }
+        guard windows.count > 1 else { return }
+        (forward ? windows.last : windows[1])?.makeKeyAndOrderFront(nil)
+    }
+}
+
 struct PhotoStacksApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private var model: AppModel { appDelegate.model }
@@ -21,17 +31,24 @@ struct PhotoStacksApp: App {
     var body: some Scene {
         Window("PhotoStacks", id: "main") {
             ContentView(model: model)
-                .frame(minWidth: 960, minHeight: 520)
+                .frame(minWidth: 1260, minHeight: 520)
         }
-        .defaultSize(width: 1120, height: 720)
+        .defaultSize(width: 1380, height: 720)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Kies map…") { model.chooseFolder() }
+                Button("Kies startmap…") { model.chooseFolder() }
                     .keyboardShortcut("o")
                 Button("Opnieuw scannen") { model.scan() }
                     .keyboardShortcut("r")
                     .disabled(model.folder == nil || model.phase == .scanning)
+            }
+            // SwiftUI's Window menu lacks the system's ⌘` (the AppKit item is not added for these scenes).
+            CommandGroup(after: .windowArrangement) {
+                Button("Volgend venster") { WindowCycler.cycle(forward: true) }
+                    .keyboardShortcut("`")
+                Button("Vorig venster") { WindowCycler.cycle(forward: false) }
+                    .keyboardShortcut("`", modifiers: [.command, .shift])
             }
         }
         Window("Voorbeeld", id: PreviewView.windowID) {
@@ -39,6 +56,9 @@ struct PhotoStacksApp: App {
         }
         .defaultSize(width: 1200, height: 860)
         .windowToolbarStyle(.unified)
+        Settings {
+            SettingsView(model: model)
+        }
     }
 }
 
@@ -47,14 +67,20 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        content
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if model.result != nil { StatusBar(model: model) }
-            }
-            .navigationTitle(model.folder?.lastPathComponent ?? "PhotoStacks")
-            .navigationSubtitle(model.folder.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "")
-            .toolbar { toolbar }
+        NavigationSplitView {
+            FolderSidebar(model: model)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 420)
+        } detail: {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if model.result != nil { StatusBar(model: model) }
+                }
+                .navigationTitle(model.folder?.lastPathComponent ?? "PhotoStacks")
+                .navigationSubtitle(model.folder.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "")
+                .toolbar { toolbar }
+                .modifier(HiddenToolbarBackground())
+        }
             .dropDestination(for: URL.self) { urls, _ in
                 guard let url = urls.first else { return false }
                 model.open(url)
@@ -63,8 +89,12 @@ struct ContentView: View {
             .overlay {
                 if model.isDropTargeted { DropHighlight() }
             }
-            .onChange(of: model.preview?.fileName) { _, fileName in
-                if fileName != nil { openWindow(id: PreviewView.windowID) }
+            .onChange(of: model.previewRequests) {
+                guard model.preview != nil else { return }
+                openWindow(id: PreviewView.windowID)
+                // The viewer may sit behind other windows or on another Space.
+                NSApp.activate()
+                NSApp.windows.first { $0.identifier?.rawValue.contains(PreviewView.windowID) == true }?.makeKeyAndOrderFront(nil)
             }
             .modifier(ModelAlerts(model: model, inPreview: false))
     }
@@ -89,7 +119,7 @@ struct ContentView: View {
             Button { model.chooseFolder() } label: {
                 Label("Kies map", systemImage: "folder.badge.plus")
             }
-            .help("Kies een map met .ORF-bestanden (⌘O)")
+            .help("Kies de startmap van de mapboom (⌘O)")
             Button { model.scan() } label: {
                 Label("Opnieuw scannen", systemImage: "arrow.clockwise")
             }
@@ -138,13 +168,16 @@ struct ContentView: View {
             } else {
                 stackTable
             }
+        } else if model.rootFolder != nil {
+            ContentUnavailableView("Kies een map", systemImage: "square.stack.3d.down.right",
+                                   description: Text("Kies links een map om hem op reeksen te analyseren."))
         } else {
             ContentUnavailableView {
-                Label("Kies een map", systemImage: "square.stack.3d.down.right")
+                Label("Kies een startmap", systemImage: "square.stack.3d.down.right")
             } description: {
-                Text("Sleep een map met .ORF-bestanden hierheen of op het app-icoon.")
+                Text("Kies de map waaronder je foto's staan, of sleep een map met .ORF-bestanden hierheen of op het app-icoon.")
             } actions: {
-                Button("Kies map…") { model.chooseFolder() }
+                Button("Kies startmap…") { model.chooseFolder() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
             }
@@ -166,13 +199,13 @@ struct ContentView: View {
         let selection = Binding(get: { model.selection }, set: { model.selection = $0 })
         return Table(rows, selection: selection) {
             TableColumn("Stack") { row in nameCell(row).fixedRowHeight() }
-                .width(min: 300, ideal: 380)
+                .width(min: 280, ideal: 310)
             TableColumn("Status") { row in statusCell(row).fixedRowHeight() }
-                .width(min: 160, ideal: 250)
-            TableColumn("Scherpte") { row in sharpnessCell(row).fixedRowHeight() }
-                .width(min: 130, ideal: 140)
+                .width(min: 150, ideal: 220)
+            TableColumn(measurementTitle) { row in measurementCell(row).fixedRowHeight() }
+                .width(min: 170, ideal: 200)
             TableColumn("") { row in actionCell(row).fixedRowHeight() }
-                .width(min: 180, ideal: 190)
+                .width(min: 150, ideal: 160)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
         .contextMenu(forSelectionType: String.self) { ids in
@@ -274,6 +307,9 @@ struct ContentView: View {
     /// expanding or collapsing a stack some rows keep the height of the row that used to be at their position).
     static let rowHeight: CGFloat = 32
 
+    /// Width of the grey icon buttons in the last column (Helicon / Photomatix, trash, PhotoLab, view).
+    static let pillWidth: CGFloat = 48
+
     private func subtitle(_ entry: StackEntry) -> String {
         guard let active = entry.active else { return "Te weinig foto's over" }
         let out = entry.detected.count - active.count
@@ -291,12 +327,9 @@ struct ContentView: View {
                 let missing = active.kind.reportsMissingShots ? active.missingShots : []
                 let tiffs = model.tiffCount(entry)
                 HStack(spacing: 4) {
-                    if active.kind == .hdr {
-                        exposureCoverageBadges(entry)
-                    }
-                    if !entry.unsharp.isEmpty {
-                        Badge(text: "\(entry.unsharp.count) onscherp", systemImage: "camera.metering.unknown", tint: .red)
-                            .help("Niets scherp op: " + entry.unsharp.map(\.stem).joined(separator: ", "))
+                    ResultBadges(results: model.results(for: entry), appName: model.appName(for: .result),
+                                 canOpen: model.apps[.result] != nil) {
+                        model.openResult(fileName: $0)
                     }
                     if tiffs.found > 0 {
                         Badge(text: "TIFF \(tiffs.found)/\(tiffs.total)", systemImage: "photo.stack",
@@ -310,13 +343,10 @@ struct ContentView: View {
                     }
                 }
             }
-        case let .photo(photo, entryKey):
+        case let .photo(photo, _):
             HStack(spacing: 4) {
                 if model.excluded.contains(photo.fileName) {
                     Badge(text: "Uit stack", systemImage: "minus.circle", tint: .secondary)
-                }
-                if let stats = model.exposure[photo.fileName] {
-                    exposureBadges(stats, ev: model.relativeEV(of: photo, entryKey: entryKey))
                 }
                 if let tiff = model.tiff(for: photo) {
                     let versions = model.tiffVersions(for: photo)
@@ -328,56 +358,50 @@ struct ContentView: View {
         }
     }
 
-    /// How well an HDR bracket covers the scene: clipped highlights in its darkest frame, lost shadows in its
-    /// brightest frame.
-    @ViewBuilder
-    private func exposureCoverageBadges(_ entry: StackEntry) -> some View {
-        if let coverage = model.exposureCoverage(entry) {
-            Badge(text: "Hoog \(ExposureFormat.percent(coverage.highlights))", systemImage: "sun.max",
-                  tint: ExposureFormat.tint(coverage.highlights))
-                .help("Overbelicht in de donkerste foto: \(ExposureFormat.percent(coverage.highlights)) van de sensorpixels "
-                    + "zit op het maximum. Groen: de reeks houdt alle hooglichten.")
-            Badge(text: "Schaduw \(ExposureFormat.percent(coverage.shadows))", systemImage: "moon",
-                  tint: ExposureFormat.tint(coverage.shadows))
-                .help("Onderbelicht in de lichtste foto: \(ExposureFormat.percent(coverage.shadows)) van de sensorpixels is meer dan "
-                    + "\(ExposureAnalyzer.underexposureStops) stops donkerder dan het maximum. Groen: de reeks houdt alle schaduwen.")
-        } else if model.exposureProgress != nil {
-            ProgressView().controlSize(.small)
-        }
+    /// Title of the measurement column, after what the visible stacks are measured on.
+    private var measurementTitle: String {
+        let kinds = model.visibleEntries.map(\.detected.kind)
+        let sharpness = kinds.contains(where: \.measuresSharpness)
+        let exposure = kinds.contains(where: \.measuresExposure)
+        return sharpness && exposure ? "Scherpte / belichting" : exposure ? "Belichting" : "Scherpte"
     }
 
-    /// Exposure of one HDR photo, relative to the first of its stack, and how much of it is clipped.
+    /// What is measured on the sensor data: sharpness for focus stacks and bursts, clipping for HDR.
     @ViewBuilder
-    private func exposureBadges(_ stats: ExposureStats, ev: Double?) -> some View {
-        if let ev {
-            Text(ExposureFormat.ev(ev))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .frame(minWidth: 52, alignment: .trailing)
-        }
-        Badge(text: ExposureFormat.percent(stats.over), systemImage: "sun.max", tint: ExposureFormat.tint(stats.over))
-            .help("Overbelicht: \(ExposureFormat.percent(stats.over)) van de sensorpixels zit op het maximum.")
-        Badge(text: ExposureFormat.percent(stats.under), systemImage: "moon", tint: ExposureFormat.tint(stats.under))
-            .help("Onderbelicht: \(ExposureFormat.percent(stats.under)) van de sensorpixels is meer dan "
-                + "\(ExposureAnalyzer.underexposureStops) stops donkerder dan het maximum.")
-    }
-
-    @ViewBuilder
-    private func sharpnessCell(_ row: StackRow) -> some View {
+    private func measurementCell(_ row: StackRow) -> some View {
         switch row {
         case let .stack(key):
-            if model.sharpnessProgress != nil {
-                ProgressView().controlSize(.small)
-            } else if let active = model.entry(key)?.active, active.kind.measuresSharpness {
-                SharpnessSparkline(ratios: active.photos.map { model.ratios[$0.fileName] ?? 0 })
+            if let entry = model.entry(key), let active = entry.active {
+                if active.kind.measuresExposure {
+                    if let coverage = model.exposureCoverage(entry) {
+                        ExposureCoverageBadges(highlights: coverage.highlights, shadows: coverage.shadows,
+                                               range: model.sceneRange(entry))
+                    } else if model.exposureProgress != nil {
+                        ProgressView().controlSize(.small)
+                    }
+                } else if model.sharpnessProgress != nil {
+                    ProgressView().controlSize(.small)
+                } else {
+                    HStack(spacing: 6) {
+                        SharpnessSparkline(ratios: active.photos.map { model.ratios[$0.fileName] ?? 0 })
+                        if !entry.unsharp.isEmpty {
+                            Badge(text: "\(entry.unsharp.count) onscherp", systemImage: "camera.metering.unknown", tint: .red)
+                                .help("Niets scherp op: " + entry.unsharp.map(\.stem).joined(separator: ", "))
+                        }
+                    }
+                }
             }
-        case let .photo(photo, _):
-            if model.excluded.contains(photo.fileName) {
-                EmptyView()
+        case let .photo(photo, entryKey):
+            if model.entry(entryKey)?.detected.kind.measuresExposure == true {
+                // Also for photos taken out of the stack: their clipping may be the reason.
+                if let stats = model.exposure[photo.fileName] {
+                    ExposureBadges(stats: stats, ev: model.relativeEV(of: photo, entryKey: entryKey))
+                } else if model.exposureProgress != nil {
+                    ProgressView().controlSize(.small)
+                }
             } else if let ratio = model.ratios[photo.fileName] {
                 SharpnessBar(ratio: ratio)
-            } else if model.sharpnessProgress != nil {
+            } else if model.sharpnessProgress != nil, !model.excluded.contains(photo.fileName) {
                 ProgressView().controlSize(.small)
             }
         }
@@ -394,21 +418,19 @@ struct ContentView: View {
                         FileDragHandle { model.photoURLs(for: active) }
                             .frame(width: 18, height: 16)
                             .help("Sleep de foto's van deze stack naar een andere app of de Finder")
+                        // A fixed slot (also for kinds without an app), so the handle and trash button line up in every row.
                         appButton(entry, active: active)
+                            .frame(width: Self.pillWidth)
                     }
-                    Menu {
+                    SplitIconButton {
+                        model.requestTrashStack(entry)
+                    } icon: {
+                        Image(systemName: "trash").foregroundStyle(.secondary)
+                    } items: {
                         Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                         Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
                             .disabled(!model.hasTIFFs(entry))
-                    } label: {
-                        Image(systemName: "trash")
-                    } primaryAction: {
-                        model.requestTrashStack(entry)
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.visible)
-                    .fixedSize()
-                    .foregroundStyle(.secondary)
                     .help("Klik: hele stack met alle foto's naar de Prullenmand; pijltje: alleen de DxO-TIFF's (altijd met bevestiging)")
                 }
             }
@@ -419,9 +441,9 @@ struct ContentView: View {
                 Button {
                     model.showPreview(photo, entryKey: entryKey)
                 } label: {
-                    Image(systemName: "eye")
+                    Image(systemName: "eye").pill()
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Foto groot bekijken (of dubbelklik)")
             }
@@ -432,30 +454,31 @@ struct ContentView: View {
         Button {
             model.openInPhotoLab(photo)
         } label: {
-            Image(systemName: "slider.horizontal.3")
+            Image(systemName: "slider.horizontal.3").pill()
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .disabled(model.photoLabURL == nil)
+        .opacity(model.photoLabURL == nil ? 0.4 : 1)
         .help(model.photoLabURL == nil ? "DxO PhotoLab is niet gevonden." : "Open deze foto in DxO PhotoLab")
     }
 
-    /// The app that processes a stack of this kind: Helicon Focus for focus stacks, Photomatix for HDR; bursts
-    /// have none (the best frame is picked in the preview).
-    private func app(for kind: StackKind) -> (name: String, url: URL?, open: (PhotoStack, AppModel.SourceKind) -> Void)? {
-        switch kind {
-        case .focus: ("Helicon", model.heliconURL, model.openInHelicon)
-        case .hdr: ("Photomatix", model.photomatixURL, model.openInPhotomatix)
-        case .proCap, .series: nil
-        }
+    /// The app that processes a stack of this kind (Helicon Focus for focus stacks, Photomatix Pro for HDR, unless the
+    /// settings say otherwise); bursts have none (the best frame is picked in the preview).
+    private func app(for kind: StackKind) -> (role: AppRole, name: String, url: URL?, open: (PhotoStack, AppModel.SourceKind) -> Void)? {
+        guard let role = AppRole(stackKind: kind) else { return nil }
+        return (role, model.appName(for: role), model.apps[role]?.url, model.openStack)
     }
 
-    private func appName(_ name: String) -> String {
-        name == "Helicon" ? "Helicon Focus" : "Photomatix Pro"
+    /// Grey symbol for the technique, like the trash button: macro for focus stacking, contrast for HDR.
+    private func appIcon(_ app: (role: AppRole, name: String)) -> some View {
+        Image(systemName: app.role.systemImage)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Open in \(app.name)")
     }
 
-    /// Opens the stack in its app; with DxO TIFFs a menu offers RAW or TIFF, and a click on the button itself opens
-    /// TIFF when every photo has one.
+    /// Opens the stack in its app (icon button); with DxO TIFFs a menu offers RAW or TIFF, and a click on the button
+    /// itself opens TIFF when every photo has one.
     @ViewBuilder
     private func appButton(_ entry: StackEntry, active: PhotoStack) -> some View {
         if let app = app(for: active.kind) {
@@ -464,28 +487,30 @@ struct ContentView: View {
                 Button {
                     app.open(active, .raw)
                 } label: {
-                    Label(app.name, systemImage: "arrow.up.forward.app")
+                    appIcon((app.role, app.name)).pill()
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
                 .disabled(app.url == nil)
-                .help(app.url == nil ? "\(appName(app.name)) is niet gevonden." : "Open deze stack in \(appName(app.name))")
+                .opacity(app.url == nil ? 0.4 : 1)
+                .help(app.url == nil ? "\(app.name) is niet gevonden; kies een andere app in de instellingen (⌘,)." : "Open deze stack in \(app.name)")
             } else {
                 let kind = model.defaultSourceKind(entry)
-                Menu {
-                    Button("RAW (.ORF)") { app.open(active, .raw) }
-                    Button("TIFF (DxO) – \(tiffs.found)/\(tiffs.total)") { app.open(active, .tiff) }
-                } label: {
-                    Label(kind == .tiff ? "\(app.name) TIFF" : "\(app.name) RAW", systemImage: "arrow.up.forward.app")
-                } primaryAction: {
+                SplitIconButton {
                     app.open(active, kind)
+                } icon: {
+                    appIcon((app.role, app.name))
+                } items: {
+                    Button { app.open(active, .raw) } label: {
+                        if kind == .raw { Label("RAW (.ORF)", systemImage: "checkmark") } else { Text("RAW (.ORF)") }
+                    }
+                    Button { app.open(active, .tiff) } label: {
+                        let title = "TIFF (DxO) – \(tiffs.found)/\(tiffs.total)"
+                        if kind == .tiff { Label(title, systemImage: "checkmark") } else { Text(title) }
+                    }
                 }
-                .menuStyle(.button)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .fixedSize()
                 .disabled(app.url == nil)
-                .help("Klik: open de \(kind == .tiff ? "TIFFs" : "RAW-bestanden") in \(appName(app.name)); pijltje: kies RAW of TIFF")
+                .opacity(app.url == nil ? 0.4 : 1)
+                .help("Klik: open de \(kind == .tiff ? "TIFFs" : "RAW-bestanden") in \(app.name); pijltje: kies RAW of TIFF")
             }
         }
     }
@@ -497,14 +522,15 @@ struct ContentView: View {
             case let .stack(key):
                 if let entry = model.entry(key) {
                     if let active = entry.active, let app = app(for: active.kind) {
-                        Button("Open RAW in \(appName(app.name))") { app.open(active, .raw) }
+                        Button("Open RAW in \(app.name)") { app.open(active, .raw) }
                             .disabled(app.url == nil)
                         if model.tiffCount(entry).found > 0 {
-                            Button("Open TIFF in \(appName(app.name))") { app.open(active, .tiff) }
+                            Button("Open TIFF in \(app.name)") { app.open(active, .tiff) }
                                 .disabled(app.url == nil)
                         }
                     }
                     Button("Toon in Finder") { model.reveal(entry) }
+                    Button("Toon originelen in Finder") { model.revealOriginals(entry) }
                     Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                     Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
                         .disabled(!model.hasTIFFs(entry))
@@ -560,8 +586,15 @@ struct StackThumbnail: View {
         let photo = model.thumbnailPhoto(for: entry)
         PhotoThumbnail(model: model, photo: photo, width: 38)
             .opacity(entry.active == nil ? 0.5 : 1)
-            .onTapGesture { model.showPreview(photo, entryKey: entry.key) }
-            .help("\(photo.stem) – klik om groot te bekijken")
+            .onTapGesture {
+                HoverPreviewPanel.shared.hide()
+                model.showPreview(photo, entryKey: entry.key)
+            }
+            .background(HoverTracker { anchor in
+                HoverPreviewPanel.shared.schedule(besides: anchor) { await model.loadHoverImage(of: photo) }
+            } onExit: {
+                HoverPreviewPanel.shared.hide()
+            })
     }
 }
 
@@ -593,5 +626,17 @@ extension View {
     /// The fixed height of every row in the stack table.
     func fixedRowHeight() -> some View {
         frame(height: ContentView.rowHeight)
+    }
+}
+
+/// Without its own background the toolbar starts at the sidebar divider, like the table below it; the system
+/// background begins a few points left of the divider.
+struct HiddenToolbarBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            content
+        }
     }
 }

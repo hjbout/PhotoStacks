@@ -64,10 +64,16 @@ struct PreviewView: View {
         }
         ToolbarItem(placement: .status) {
             if let photo = model.previewPhoto {
-                if isExcluded {
-                    Badge(text: "Uit stack", systemImage: "minus.circle", tint: .orange)
-                } else if let ratio = model.ratios[photo.fileName] {
-                    SharpnessBar(ratio: ratio)
+                HStack(spacing: 8) {
+                    if isExcluded {
+                        Badge(text: "Uit stack", systemImage: "minus.circle", tint: .orange)
+                    }
+                    // The same measurement as in the table: clipping for HDR, otherwise sharpness.
+                    if let stats = model.exposure[photo.fileName], let entryKey = model.preview?.entryKey {
+                        ExposureBadges(stats: stats, ev: model.relativeEV(of: photo, entryKey: entryKey))
+                    } else if !isExcluded, let ratio = model.ratios[photo.fileName] {
+                        SharpnessBar(ratio: ratio)
+                    }
                 }
             }
         }

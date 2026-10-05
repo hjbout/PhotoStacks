@@ -48,12 +48,20 @@ enum CLI {
                 print("  los (geen stack): \(photo.fileName) \(photo.driveMode)")
             }
             if arguments.contains("--exposure") {
-                printExposure(of: result.stacks.filter { $0.kind == .hdr }, in: folder)
+                printExposure(of: result.stacks.filter(\.kind.measuresExposure), in: folder)
                 return 0
             }
             if arguments.contains("--sharpness") {
                 printSharpness(of: result.stacks.filter(\.kind.measuresSharpness), in: folder)
                 return 0
+            }
+            let found = StackResults.scan(folder: folder, stacks: detected.stacks.map { ($0.photos[0].fileName, $0) }) { names in
+                (try? ExifToolReader.readSoftware(files: names, in: folder)) ?? [:]
+            }
+            for stack in detected.stacks {
+                for result in found[stack.photos[0].fileName] ?? [] {
+                    print("  resultaat [\(result.app.displayName)] \(stack.folderName): \(result.fileName)")
+                }
             }
             let tiffs = DxOExports.scan(folder: folder, photos: detected.stacks.flatMap(\.photos))
                 .compactMapValues { $0.first?.fileName }
@@ -80,7 +88,9 @@ enum CLI {
         func percent(_ value: Double) -> String { String(format: "%.2f%%", value * 100) }
         for stack in stacks {
             if let coverage = ExposureAnalyzer.coverage(of: stack, stats: stats) {
-                print("\(stack.folderName): hoog \(percent(coverage.highlights)), schaduw \(percent(coverage.shadows))")
+                let range = ExposureAnalyzer.sceneRange(of: stack, stats: stats).map { String(format: ", bereik %.1f stops", $0) } ?? ""
+                let span = ExposureAnalyzer.bracketSpan(of: stack, stats: stats).map { String(format: ", reeks %.1f stops", $0) } ?? ""
+                print("\(stack.folderName): hoog \(percent(coverage.highlights)), schaduw \(percent(coverage.shadows))\(span)\(range)")
             } else {
                 print("\(stack.folderName): niet (volledig) gemeten")
             }
