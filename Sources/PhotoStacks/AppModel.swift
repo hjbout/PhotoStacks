@@ -150,6 +150,10 @@ final class AppModel {
     var resultIndex: [String: [StackResult]] = [:]
     private let softwareCache = SoftwareTagCache()
     private var resultsGeneration = 0
+    /// The camera's own JPG of each stack photo (photo file name → JPG file name), kept up to date like the DxO TIFFs.
+    var frameJPGs: [String: String] = [:]
+    private let frameJPGCache = SoftwareTagCache()
+    private var frameJPGsGeneration = 0
 
     /// Link updates run one after another.
     private let syncQueue = DispatchQueue(label: "PhotoStacks.sync")
@@ -198,6 +202,7 @@ final class AppModel {
             MainActor.assumeIsolated {
                 self?.refreshTIFFs()
                 self?.refreshResults()
+                self?.refreshFrameJPGs()
                 self?.refreshApps()
             }
         }
@@ -274,6 +279,7 @@ final class AppModel {
         entries = []
         tiffIndex = [:]
         resultIndex = [:]
+        frameJPGs = [:]
         thumbnails = [:]
         hoverImages = [:]
         report = nil
@@ -308,6 +314,7 @@ final class AppModel {
         recompute()
         phase = .scanned
         refreshResults()
+        refreshFrameJPGs()
         measureSharpness(of: result.stacks, in: folder)
         measureExposure(of: result.stacks, in: folder)
     }
@@ -408,6 +415,31 @@ final class AppModel {
     private func applyResults(_ index: [String: [StackResult]], for folder: URL, generation: Int) {
         guard folder == self.folder, generation == resultsGeneration, index != resultIndex else { return }
         resultIndex = index
+    }
+
+    /// Looks for the camera's JPGs of the stack photos (directory listing, plus exiftool for files not read before),
+    /// in the background.
+    func refreshFrameJPGs() {
+        guard let folder, !entries.isEmpty else { return }
+        let photos = entries.flatMap(\.detected.photos)
+        let cache = frameJPGCache
+        frameJPGsGeneration += 1
+        let generation = frameJPGsGeneration
+        Task.detached(priority: .utility) {
+            let index = FrameJPGs.find(in: folder, photos: photos, cache: cache)
+            await self.applyFrameJPGs(index, for: folder, generation: generation)
+        }
+    }
+
+    private func applyFrameJPGs(_ index: [String: String], for folder: URL, generation: Int) {
+        guard folder == self.folder, generation == frameJPGsGeneration, index != frameJPGs else { return }
+        frameJPGs = index
+    }
+
+    /// How many photos of the stack (also those taken out) have their own JPG next to the .ORF.
+    func frameJPGCount(_ entry: StackEntry) -> (found: Int, total: Int) {
+        let photos = entry.detected.photos
+        return (photos.filter { frameJPGs[$0.fileName] != nil }.count, photos.count)
     }
 
     func results(for entry: StackEntry) -> [StackResult] {
@@ -698,27 +730,18 @@ final class AppModel {
     }
 
     /// Asks for confirmation before moving the camera's JPGs of the stack's photos to the Trash (never the stacked JPG).
-    /// Which JPGs those are follows from their Drive Mode and Stacked Image tags, read in the background.
+    /// Which JPGs those are follows from their Drive Mode and Stacked Image tags (see `refreshFrameJPGs`).
     func requestTrashFrameJPGs(_ entry: StackEntry) {
         guard let folder else { return }
-        let photos = entry.detected.photos, key = entry.key, name = entry.name
-        Task.detached {
-            let found = FrameJPGs.find(in: folder, photos: photos) { names in
-                (try? ExifToolReader.readDriveAndStack(files: names, in: folder)) ?? [:]
-            }
-            let files = photos.compactMap { found[$0.fileName] }.map { folder.appendingPathComponent($0) }
-            await self.showFrameJPGRequest(files, photos: photos, key: key, name: name, for: folder)
-        }
-    }
-
-    private func showFrameJPGRequest(_ files: [URL], photos: [PhotoInfo], key: String, name: String, for folder: URL) {
-        guard folder == self.folder else { return }
+        let files = entry.detected.photos.compactMap { frameJPGs[$0.fileName] }
+            .map { folder.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !files.isEmpty else {
             alertMessage = "Deze stack heeft geen JPG's van de losse foto's."
             return
         }
-        trashRequest = TrashRequest(entryKey: key, stackName: name, photos: photos, files: files, tiffCount: 0,
-                                    fromPreview: false, jpgsOnly: true)
+        trashRequest = TrashRequest(entryKey: entry.key, stackName: entry.name, photos: entry.detected.photos, files: files,
+                                    tiffCount: 0, fromPreview: false, jpgsOnly: true)
     }
 
     /// Every photo of the stack, also the ones taken out of it, e.g. when Helicon's result is saved and the
@@ -747,7 +770,10 @@ final class AppModel {
         if let error {
             alertMessage = "Naar de Prullenmand verplaatsen is (deels) mislukt: \(error.localizedDescription)"
         }
-        if request.jpgsOnly { return }
+        if request.jpgsOnly {
+            if folder == self.folder { refreshFrameJPGs() }
+            return
+        }
         if request.tiffsOnly {
             guard folder == self.folder else { return }
             refreshTIFFs()
@@ -780,6 +806,7 @@ final class AppModel {
             try? ExclusionStore.save(excluded, for: folder)
         }
         refreshTIFFs()
+        refreshFrameJPGs()
         recompute()
         syncIfNeeded()
 

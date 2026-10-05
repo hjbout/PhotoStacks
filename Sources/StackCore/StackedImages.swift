@@ -91,6 +91,19 @@ public enum StackedImages {
 /// Stacked Image tag says "No". The camera's stacked JPG has another name, Drive Mode "Sequential" and a Stacked Image
 /// tag with the number of images, so it is never part of this.
 public enum FrameJPGs {
+    /// Same, reading the tags with exiftool; `cache` remembers them per file, so a file is only read once.
+    public static func find(in folder: URL, photos: [PhotoInfo], cache: SoftwareTagCache) -> [String: String] {
+        find(in: folder, photos: photos) { names in
+            cache.tags(for: names, in: folder) { files in
+                ((try? ExifToolReader.readDriveAndStack(files: files, in: folder)) ?? [:])
+                    .mapValues { "\($0.driveMode)\t\($0.stackedImage)" }
+            }.mapValues { text in
+                let parts = text.split(separator: "\t", omittingEmptySubsequences: false)
+                return (parts.first.map(String.init) ?? "", parts.count > 1 ? String(parts[1]) : "")
+            }
+        }
+    }
+
     /// Per stack photo (file name) its JPG next to it, if that is the photo's own JPG. `info` returns the Drive Mode and
     /// Stacked Image texts of the given files; it is only asked for JPGs that exist.
     public static func find(in folder: URL, photos: [PhotoInfo],

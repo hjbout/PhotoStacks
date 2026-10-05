@@ -282,6 +282,9 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                            .help(model.frameJPGCount(entry).found == 0 ? ""
+                                : "JPG: de camera bewaart naast elke .ORF een JPG van de losse foto. Weggooien kan via het "
+                                + "pijltje naast de prullenbak; de stacked JPG blijft staan.")
                     }
                 }
             }
@@ -315,8 +318,19 @@ struct ContentView: View {
         let out = entry.detected.count - active.count
         var parts = ["\(active.count) foto's", "Shot \(active.firstShot)–\(active.lastShot)"]
         if model.kindFilter == nil { parts.insert(active.kind.title, at: 0) }
+        let jpgs = model.frameJPGCount(entry)
+        if jpgs.found > 0 { parts.append(jpgs.found == jpgs.total ? "\(jpgs.found) JPG" : "\(jpgs.found)/\(jpgs.total) JPG") }
         if out > 0 { parts.append("\(out) uit stack") }
         return parts.joined(separator: " · ")
+    }
+
+    /// Menu item that sends the camera's JPGs of the stack's photos to the Trash; the count shows that they are there.
+    private func frameJPGButton(_ entry: StackEntry) -> some View {
+        let count = model.frameJPGCount(entry).found
+        return Button("Alleen JPG's van losse foto's naar Prullenmand…" + (count > 0 ? " (\(count))" : "")) {
+            model.requestTrashFrameJPGs(entry)
+        }
+        .disabled(count == 0)
     }
 
     @ViewBuilder
@@ -357,6 +371,9 @@ struct ContentView: View {
                     Badge(text: versions > 1 ? "TIFF ×\(versions)" : "TIFF", tint: versions > 1 ? .orange : .purple)
                         .help(versions > 1 ? "\(versions) DxO-TIFFs; de nieuwste wordt gebruikt: \(tiff.fileName)"
                             : "DxO-TIFF: \(tiff.fileName)")
+                }
+                if let jpg = model.frameJPGs[photo.fileName] {
+                    Badge(text: "JPG", tint: .secondary).help("JPG van de camera: \(jpg)")
                 }
             }
         }
@@ -434,7 +451,7 @@ struct ContentView: View {
                         Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                         Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
                             .disabled(!model.hasTIFFs(entry))
-                        Button("Alleen JPG's van losse foto's naar Prullenmand…") { model.requestTrashFrameJPGs(entry) }
+                        frameJPGButton(entry)
                     }
                     .help("Klik: hele stack met alle foto's naar de Prullenmand; pijltje: alleen de DxO-TIFF's of alleen de JPG's van de losse foto's (altijd met bevestiging)")
                 }
@@ -539,7 +556,7 @@ struct ContentView: View {
                     Button("Hele stack naar Prullenmand…") { model.requestTrashStack(entry) }
                     Button("Alleen DxO-TIFF's naar Prullenmand…") { model.requestTrashTIFFs(entry) }
                         .disabled(!model.hasTIFFs(entry))
-                    Button("Alleen JPG's van losse foto's naar Prullenmand…") { model.requestTrashFrameJPGs(entry) }
+                    frameJPGButton(entry)
                     if !entry.unsharp.isEmpty {
                         Button("Toon onscherpe foto's in Finder") { model.revealUnsharp(entry) }
                     }

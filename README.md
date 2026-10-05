@@ -63,6 +63,10 @@ naar de Prullenmand.
   Prullenmand…* (ook in het contextmenu). Dat zijn de JPG's die de camera naast elke foto bewaart (zelfde naam als de
   .ORF); herkend aan de MakerNotes: Drive Mode gelijk aan die van de foto (`Focus Bracketing, Shot 3`) en Stacked Image
   "No". De stacked JPG van de camera (Drive Mode Sequential, Stacked Image Focus-stacked) en de .ORF-bestanden blijven staan.
+  Dat ze er zijn zie je subtiel: de grijze regel onder de stacknaam eindigt op `15 JPG` (of `12/15 JPG`), uitgeklapte
+  foto's krijgen een grijze tag `JPG` in de kolom Status en het menu-item toont het aantal en is grijs als er geen
+  zijn. De JPG's worden op de achtergrond gezocht (alleen nieuwe bestanden worden gelezen) en bij het terugkeren in
+  de app ververst.
 - Foto's per stack: klap een stack open voor alle foto's met scherpte-balkje (rood < 25%, oranje < 50%).
   **Bekijk** of dubbelklik opent het voorbeeldvenster (←/→ bladeren). Zoomen: knijpen met twee vingers op het
   trackpad (tot 800%), ⌘+ / ⌘−, Z of klik = passend ↔ 100%. 100% is één pixel van de RAW; zodra je verder inzoomt
