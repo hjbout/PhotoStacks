@@ -128,13 +128,33 @@ struct Badge: View {
 }
 
 /// "Stacked JPG": the camera stacked this focus stack itself and saved the result as a JPG next to the originals.
+/// With `open` the badge is a menu that opens the JPG in the app chosen for results (DxO PhotoLab by default), like
+/// the badges of Helicon and Photomatix.
 struct StackedImageBadge: View {
     let image: StackedImage
+    var appName = ""
+    var canOpen = false
+    var open: ((String) -> Void)?
 
     var body: some View {
-        Badge(text: "Stacked JPG", systemImage: "camera", tint: .teal)
-            .help("De camera heeft deze stack zelf gestackt (\(image.imageCount) foto's) en het resultaat als JPG bewaard: "
-                + "\(image.fileName). Dat beeld is de miniatuur van de stack en staat vooraan in het voorbeeldvenster.")
+        let badge = Badge(text: "Stacked JPG", systemImage: "camera", tint: .teal)
+        let info = "De camera heeft deze stack zelf gestackt (\(image.imageCount) foto's) en het resultaat als JPG bewaard: "
+            + "\(image.fileName). Dat beeld is de miniatuur van de stack en staat vooraan in het voorbeeldvenster."
+        if let open {
+            Menu {
+                Button("Open in \(appName)") { open(image.fileName) }
+                    .disabled(!canOpen)
+            } label: {
+                badge
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(info + "\nKlik om de JPG in \(appName) te openen.")
+        } else {
+            badge.help(info)
+        }
     }
 }
 
