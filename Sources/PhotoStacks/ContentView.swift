@@ -327,6 +327,9 @@ struct ContentView: View {
                 let missing = active.kind.reportsMissingShots ? active.missingShots : []
                 let tiffs = model.tiffCount(entry)
                 HStack(spacing: 4) {
+                    if let stackedImage = entry.stackedImage {
+                        StackedImageBadge(image: stackedImage)
+                    }
                     ResultBadges(results: model.results(for: entry), appName: model.appName(for: .result),
                                  canOpen: model.apps[.result] != nil) {
                         model.openResult(fileName: $0)

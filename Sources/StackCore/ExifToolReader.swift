@@ -66,6 +66,27 @@ public enum ExifToolReader {
         return try parseSoftware(json: json)
     }
 
+    /// How many shots the camera combined into each of these JPGs, for the ones it made by focus stacking in the camera
+    /// (MakerNotes `StackedImage`, "Focus-stacked (8 images)"). Other files are left out.
+    public static func readStackedImages(files: [String], in folder: URL) throws -> [String: Int] {
+        if files.isEmpty { return [:] }
+        return try parseStackedImages(json: records(["-fast", "-n", "-FileName", "-StackedImage"], files: files, in: folder))
+    }
+
+    /// `StackedImage` is two numbers: the kind of composite (9 = focus stacking) and the number of images.
+    static func parseStackedImages(json: Data) throws -> [String: Int] {
+        guard let records = try? JSONSerialization.jsonObject(with: json) as? [[String: Any]] else {
+            throw ExifToolError.invalidOutput
+        }
+        var counts: [String: Int] = [:]
+        for record in records {
+            guard let fileName = record["FileName"].map({ "\($0)" }), let value = record["StackedImage"] as? String else { continue }
+            let numbers = value.split(separator: " ").compactMap { Int($0) }
+            if numbers.count == 2, numbers[0] == 9, numbers[1] >= 2 { counts[fileName] = numbers[1] }
+        }
+        return counts
+    }
+
     static func parseSoftware(json: Data) throws -> [String: String] {
         guard let records = try? JSONSerialization.jsonObject(with: json) as? [[String: Any]] else {
             throw ExifToolError.invalidOutput

@@ -684,3 +684,80 @@ private func resultApp(_ name: String, tags: String = "", hdr: Bool = true) -> R
     #expect(layout.cropLeft == 12 && layout.cropTop == 12 && layout.cropWidth == 5184)
     #expect(abs((layout.exposure ?? 0) - log2(0.005 * 200 / (7.1 * 7.1))) < 1e-9)
 }
+
+// MARK: - Stacked JPG of the camera
+
+@Test func photoNamePrefixIsTheNameWithoutNumber() {
+    #expect(fb(5855, 1).namePrefix == "OM1R")
+    #expect(PhotoInfo(fileName: "_OM15855.ORF", driveMode: "").namePrefix == "_OM")
+    #expect(PhotoInfo(fileName: "P9120001.ORF", driveMode: "").namePrefix == "P")
+    #expect(PhotoInfo(fileName: "OM1R5855_NIK.JPG", driveMode: "").namePrefix == "OM1R5855_NIK")
+}
+
+@Test func parsesStackedImageCountsFromExifTool() throws {
+    let json = """
+    [{"SourceFile": "a.JPG", "FileName": "a.JPG", "StackedImage": "9 8"},
+     {"SourceFile": "b.JPG", "FileName": "b.JPG", "StackedImage": "0 0"},
+     {"SourceFile": "c.JPG", "FileName": "c.JPG", "StackedImage": "6 4"},
+     {"SourceFile": "d.JPG", "FileName": "d.JPG"},
+     {"SourceFile": "e.JPG", "FileName": "e.JPG", "StackedImage": "9 1"}]
+    """
+    // Only focus stacking (9) counts, and a stack of one image is no stack.
+    #expect(try ExifToolReader.parseStackedImages(json: Data(json.utf8)) == ["a.JPG": 8])
+}
+
+@Test func findsTheStackedJPGOfTheCamera() throws {
+    // Two focus stacks of 8 shots made by the camera: 1840–1847 with its JPG at 1848, 1849–1856 with its JPG at 1857.
+    // Shots 2–4 of the first stack were deleted.
+    let stackA = PhotoStack(photos: [1, 5, 6, 7, 8].map { fb(1839 + $0, $0) })
+    let stackB = PhotoStack(photos: (1...8).map { fb(1848 + $0, $0) })
+    let folder = try makeTempFolder(files: [
+        "OM1R1848.JPG": "stacked", "OM1R1857.jpg": "stacked, lowercase", "OM1R1849.JPG": "JPG of shot 1 of the next stack",
+        "OM1R1848_NIK.JPG": "copy by another program", "._OM1R1848.JPG": "resource fork", "OM1R1848.xmp": "sidecar",
+        "_OM11848.JPG": "other prefix", "OM1R1865.JPG": "too far away",
+    ])
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var asked: [String] = []
+    let found = StackedImages.scan(folder: folder, stacks: [("a", stackA), ("b", stackB)]) { names in
+        asked = names
+        return ["OM1R1848.JPG": 8, "OM1R1857.jpg": 8, "OM1R1848_NIK.JPG": 8, "_OM11848.JPG": 8, "OM1R1865.JPG": 8]
+    }
+    #expect(Set(asked) == ["OM1R1848.JPG", "OM1R1849.JPG", "OM1R1857.jpg"])  // only what lies in reach of a stack
+    #expect(found == [
+        "a": StackedImage(fileName: "OM1R1848.JPG", imageCount: 8),
+        "b": StackedImage(fileName: "OM1R1857.jpg", imageCount: 8),
+    ])
+    #expect(found["a"]?.photo.stem == "OM1R1848")
+}
+
+@Test func stackedJPGHasTheNumberThatFitsItsCount() throws {
+    let stack = PhotoStack(photos: (1...8).map { fb(1839 + $0, $0) })
+    let folder = try makeTempFolder(files: ["OM1R1848.JPG": "a", "OM1R1850.JPG": "b"])
+    defer { try? FileManager.default.removeItem(at: folder) }
+    // 1848 follows 8 shots; a JPG that says it combined 5 shots, or one at another number, belongs to something else.
+    let wrong = StackedImages.scan(folder: folder, stacks: [("a", stack)]) { _ in ["OM1R1848.JPG": 5, "OM1R1850.JPG": 8] }
+    #expect(wrong.isEmpty)
+    let right = StackedImages.scan(folder: folder, stacks: [("a", stack)]) { _ in ["OM1R1848.JPG": 8, "OM1R1850.JPG": 8] }
+    #expect(right["a"]?.fileName == "OM1R1848.JPG")
+}
+
+@Test func onlyFocusStacksHaveAStackedJPG() throws {
+    let hdr = PhotoStack(photos: (1...3).map { photo(1860 + $0, "AE Bracketing, Shot \($0)") })
+    let folder = try makeTempFolder(files: ["OM1R1864.JPG": "a"])
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var asked = false
+    let found = StackedImages.scan(folder: folder, stacks: [("h", hdr)]) { _ in
+        asked = true
+        return ["OM1R1864.JPG": 3]
+    }
+    #expect(found.isEmpty && !asked)
+}
+
+@Test func aLinkIsNoStackedJPG() throws {
+    let stack = PhotoStack(photos: (1...8).map { fb(1839 + $0, $0) })
+    let folder = try makeTempFolder(files: ["elsewhere.JPG": "a"])
+    defer { try? FileManager.default.removeItem(at: folder) }
+    try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("OM1R1848.JPG"),
+                                               withDestinationURL: folder.appendingPathComponent("elsewhere.JPG"))
+    #expect(StackedImages.scan(folder: folder, stacks: [("a", stack)]) { _ in ["OM1R1848.JPG": 8] }.isEmpty)
+}

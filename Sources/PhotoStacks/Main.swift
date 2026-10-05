@@ -58,7 +58,13 @@ enum CLI {
             let found = StackResults.scan(folder: folder, stacks: detected.stacks.map { ($0.photos[0].fileName, $0) }) { names in
                 (try? ExifToolReader.readSoftware(files: names, in: folder)) ?? [:]
             }
+            let stackedImages = StackedImages.scan(folder: folder, stacks: detected.stacks.map { ($0.photos[0].fileName, $0) }) { names in
+                (try? ExifToolReader.readStackedImages(files: names, in: folder)) ?? [:]
+            }
             for stack in detected.stacks {
+                if let image = stackedImages[stack.photos[0].fileName] {
+                    print("  stacked JPG \(stack.folderName): \(image.fileName) (\(image.imageCount) foto's)")
+                }
                 for result in found[stack.photos[0].fileName] ?? [] {
                     print("  resultaat [\(result.app.displayName)] \(stack.folderName): \(result.fileName)")
                 }

@@ -127,6 +127,17 @@ struct Badge: View {
     }
 }
 
+/// "Stacked JPG": the camera stacked this focus stack itself and saved the result as a JPG next to the originals.
+struct StackedImageBadge: View {
+    let image: StackedImage
+
+    var body: some View {
+        Badge(text: "Stacked JPG", systemImage: "camera", tint: .teal)
+            .help("De camera heeft deze stack zelf gestackt (\(image.imageCount) foto's) en het resultaat als JPG bewaard: "
+                + "\(image.fileName). Dat beeld is de miniatuur van de stack en staat vooraan in het voorbeeldvenster.")
+    }
+}
+
 /// Exposure of one HDR photo, relative to the first of its stack, and how much of it is clipped.
 struct ExposureBadges: View {
     let stats: ExposureStats

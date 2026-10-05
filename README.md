@@ -41,12 +41,24 @@ naar de Prullenmand.
   24×18-raster wordt elke foto vergeleken met de scherpste foto van de stack in datzelfde vak (na aftrek van de
   ruisvloer). Haalt een foto in geen enkel detailvak 25% daarvan, dan is hij onscherp. Drempels staan in
   `SharpnessAnalyzer.swift`; per foto bekijken: `PhotoStacks --cli <map> --sharpness`.
-- Elke stack heeft een kleine thumbnail (de eerste foto van de stack); klik erop om hem groot te bekijken.
+- Elke stack heeft een kleine thumbnail (de eerste foto van de stack, of de stacked JPG van de camera, zie
+  hieronder); klik erop om hem groot te bekijken.
   Scherpte en belichting delen één meetkolom (elke reeks heeft er één van); de kop volgt het soortfilter:
   *Scherpte*, *Belichting* of *Scherpte / belichting*. Per focus-, ProCap- of seriestack staat daar een grafiekje
-  van de scherpte per foto. De kolom Status gaat over de bestanden: DxO-TIFF's, ontbrekende shots en foto's die
-  uit de stack zijn gehaald. Uit- en inklappen met de chevron of
+  van de scherpte per foto. De kolom Status gaat over de bestanden: de stacked JPG van de camera, DxO-TIFF's,
+  ontbrekende shots en foto's die uit de stack zijn gehaald. Uit- en inklappen met de chevron of
   → / ←; ⌘O kiest een map, ⌘R scant opnieuw.
+- Stacked JPG van de camera: stackt de camera zelf (focus stacking in de camera), dan bewaart hij naast de
+  .ORF-bestanden één JPG met het resultaat (MakerNotes → Stacked Image: Focus-stacked). Heeft een focusstack zo'n
+  JPG, dan is dat beeld de thumbnail en de hoverpreview van de stack, staat hij vooraan in het voorbeeldvenster
+  (→ gaat verder naar de losse foto's, ← terug; bij de JPG zelf zijn *Uit stack* en *Prullenmand* niet
+  beschikbaar) en toont de kolom Status een teal badge **Stacked JPG**. De JPG krijgt het bestandsnummer direct na de laatste shot: dat van
+  Shot 1 plus het aantal beelden uit de tag (de shots OM1R5855–OM1R5862 geven OM1R5863.JPG). Alleen een JPG met dat
+  nummer, met de tag Focus-stacked en hetzelfde aantal beelden telt; de camera-JPG's van losse shots en kopieën van
+  andere programma's (`OM1R5863_NIK.JPG`) tellen niet. De JPG staat niet in de stack-map (anders stackt Helicon hem
+  mee) en gaat niet mee naar de Prullenmand als je de foto's of de hele stack weggooit. De controle draait bij het
+  scannen en leest alleen de tag van de JPG's op de plek waar er een kan staan. In de CLI staat hij als
+  `stacked JPG …`.
 - Foto's per stack: klap een stack open voor alle foto's met scherpte-balkje (rood < 25%, oranje < 50%).
   **Bekijk** of dubbelklik opent het voorbeeldvenster (←/→ bladeren). Zoomen: knijpen met twee vingers op het
   trackpad (tot 800%), ⌘+ / ⌘−, Z of klik = passend ↔ 100%. 100% is één pixel van de RAW; zodra je verder inzoomt

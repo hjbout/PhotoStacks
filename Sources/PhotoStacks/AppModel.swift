@@ -12,6 +12,8 @@ struct StackEntry: Identifiable {
     var active: PhotoStack?
     /// Photos of the active stack on which nothing is sharp.
     var unsharp: [PhotoInfo] = []
+    /// The JPG the camera composed of this (focus) stack itself, if it is next to the originals.
+    var stackedImage: StackedImage?
 
     var id: String { key }
     var name: String { (active ?? detected).folderName }
@@ -275,7 +277,11 @@ final class AppModel {
                 let result = StackDetector.detect(photos)
                 let excluded = ExclusionStore.load(for: folder)
                 let tiffs = DxOExports.scan(folder: folder, photos: result.stacks.flatMap(\.photos))
-                await self.finishScan(result, excluded: excluded, tiffs: tiffs, for: folder)
+                // Before the table shows up, so the rows start with the right thumbnail.
+                let stackedImages = StackedImages.scan(folder: folder, stacks: result.stacks.map { ($0.photos[0].fileName, $0) }) { names in
+                    (try? ExifToolReader.readStackedImages(files: names, in: folder)) ?? [:]
+                }
+                await self.finishScan(result, excluded: excluded, tiffs: tiffs, stackedImages: stackedImages, for: folder)
             } catch {
                 await self.fail(error, for: folder)
             }
@@ -283,12 +289,14 @@ final class AppModel {
     }
 
     private func finishScan(_ result: DetectionResult, excluded: Set<String>, tiffs: [String: [TIFFFile]],
-                            for folder: URL) {
+                            stackedImages: [String: StackedImage], for folder: URL) {
         guard folder == self.folder else { return }
         self.result = result
         self.excluded = excluded
         tiffIndex = tiffs
-        entries = result.stacks.map { StackEntry(key: $0.photos[0].fileName, detected: $0) }
+        entries = result.stacks.map {
+            StackEntry(key: $0.photos[0].fileName, detected: $0, stackedImage: stackedImages[$0.photos[0].fileName])
+        }
         if let kindFilter, !entries.contains(where: { $0.detected.kind == kindFilter }) { self.kindFilter = nil }
         recompute()
         phase = .scanned
@@ -316,22 +324,31 @@ final class AppModel {
 
     // MARK: - Thumbnails
 
-    /// The photo that represents a stack: its first photo.
+    /// The picture that represents a stack: the JPG the camera composed of it when there is one, otherwise its first photo.
     func thumbnailPhoto(for entry: StackEntry) -> PhotoInfo {
-        (entry.active ?? entry.detected).photos[0]
+        entry.stackedImage?.photo ?? (entry.active ?? entry.detected).photos[0]
+    }
+
+    /// ImageIO options for a picture of at most `maxPixelSize` pixels. An .ORF carries a JPEG preview (3200 px) that
+    /// is used as it is. Any other file (the camera's stacked JPG) has no such preview, only a tiny EXIF thumbnail
+    /// (160 px) that ImageIO would hand out whatever size is asked, so the picture is scaled down from the image itself.
+    private nonisolated static func thumbnailOptions(for url: URL, maxPixelSize: Int) -> CFDictionary {
+        let isRaw = url.pathExtension.lowercased() == "orf"
+        let source = isRaw ? kCGImageSourceCreateThumbnailFromImageIfAbsent : kCGImageSourceCreateThumbnailFromImageAlways
+        return [
+            source: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ] as [CFString: Any] as CFDictionary
     }
 
     func loadThumbnail(of photo: PhotoInfo) async {
         guard let folder, thumbnails[photo.fileName] == nil else { return }
         let url = folder.appendingPathComponent(photo.fileName)
         let image = await Task.detached(priority: .utility) { () -> NSImage? in
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-                kCGImageSourceThumbnailMaxPixelSize: 160,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-            ]
-            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, Self.thumbnailOptions(for: url, maxPixelSize: 160))
+            else { return nil }
             return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
         }.value
         guard folder == self.folder, let image else { return }
@@ -344,13 +361,9 @@ final class AppModel {
         guard let folder else { return nil }
         let url = folder.appendingPathComponent(photo.fileName)
         let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-                kCGImageSourceThumbnailMaxPixelSize: 1440,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-            ]
-            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, Self.thumbnailOptions(for: url, maxPixelSize: 1440))
+            else { return nil }
             return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
         }.value
         guard folder == self.folder, let image else { return nil }
@@ -765,25 +778,37 @@ final class AppModel {
         previewIsFit = true
     }
 
-    /// The photos the preview steps through: all photos of the stack, including the ones taken out.
+    /// The photos of the previewed stack, including the ones taken out.
     var previewPhotos: [PhotoInfo] {
         preview.flatMap { entry($0.entryKey)?.detected.photos } ?? []
     }
 
+    /// What the preview steps through: the stack's stacked JPG from the camera (if it has one), then all its photos.
+    private var previewSequence: [PhotoInfo] {
+        guard let preview, let entry = entry(preview.entryKey) else { return [] }
+        return (entry.stackedImage.map { [$0.photo] } ?? []) + entry.detected.photos
+    }
+
     var previewPhoto: PhotoInfo? {
-        previewPhotos.first { $0.fileName == preview?.fileName }
+        previewSequence.first { $0.fileName == preview?.fileName }
+    }
+
+    /// The previewed picture is the JPG the camera composed of the stack, not one of the stack's photos.
+    var previewStackedImage: StackedImage? {
+        guard let preview, let image = entry(preview.entryKey)?.stackedImage, image.fileName == preview.fileName else { return nil }
+        return image
     }
 
     func movePreview(by offset: Int) {
-        guard let preview, let index = previewPhotos.firstIndex(where: { $0.fileName == preview.fileName }) else { return }
+        guard let preview, let index = previewSequence.firstIndex(where: { $0.fileName == preview.fileName }) else { return }
         let next = index + offset
-        guard previewPhotos.indices.contains(next) else { return }
-        showPreview(previewPhotos[next], entryKey: preview.entryKey)
+        guard previewSequence.indices.contains(next) else { return }
+        showPreview(previewSequence[next], entryKey: preview.entryKey)
     }
 
     /// Takes the previewed photo out of its stack (or puts it back) and steps to the next one.
     func toggleExclusionInPreview() {
-        guard let photo = previewPhoto else { return }
+        guard previewStackedImage == nil, let photo = previewPhoto else { return }
         if excluded.contains(photo.fileName) {
             include([photo])
         } else {
@@ -832,7 +857,7 @@ final class AppModel {
 
     /// The next and previous photo in the preview (the next one first).
     private func previewNeighbours(of photo: PhotoInfo) -> [PhotoInfo] {
-        let photos = previewPhotos
+        let photos = previewSequence
         guard let index = photos.firstIndex(of: photo) else { return [] }
         return [index + 1, index - 1].filter(photos.indices.contains).map { photos[$0] }
     }
@@ -859,7 +884,7 @@ final class AppModel {
     private func loadPreview(of photo: PhotoInfo) async {
         guard let folder, imageCache[photo.fileName] == nil,
               let images = await Self.loadPreview(folder.appendingPathComponent(photo.fileName)),
-              previewPhotos.contains(photo)
+              previewSequence.contains(photo)
         else { return }
         imageCache[photo.fileName] = images
     }
@@ -872,20 +897,17 @@ final class AppModel {
         let image = await Self.loadFullImage(folder.appendingPathComponent(photo.fileName),
                                              maxPixelSize: Int(max(pixelSize.width, pixelSize.height)))
         fullImageLoading.remove(photo.fileName)
-        guard let image, previewPhotos.contains(photo) else { return }
+        guard let image, previewSequence.contains(photo) else { return }
         fullImageCache[photo.fileName] = image
     }
 
-    /// The camera's embedded JPEG preview, plus the size of the full RAW.
+    /// The camera's embedded JPEG preview of a RAW (or the stacked JPG scaled down to the same size), plus the size
+    /// of the full image.
     private nonisolated static func loadPreview(_ url: URL) async -> PreviewImages? {
         await Task.detached(priority: .userInitiated) {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-                kCGImageSourceThumbnailMaxPixelSize: 3200,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-            ]
-            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions(for: url, maxPixelSize: 3200))
+            else { return nil }
             let preview = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
             let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
             guard let width = properties[kCGImagePropertyPixelWidth] as? Int,

@@ -39,11 +39,20 @@ struct PreviewView: View {
         model.previewPhoto.map { model.excluded.contains($0.fileName) } ?? false
     }
 
-    /// "Shot 5 · OM1R5855-OM1R5896 (34) · 5 van 34"
+    /// What the picture is made of: the RAW of a photo, or the JPG when the preview shows the camera's stacked image.
+    private var sourceName: String {
+        model.previewStackedImage == nil ? "RAW" : "JPG"
+    }
+
+    /// "Shot 5 · OM1R5855-OM1R5896 (34) · 5 van 34", or "Stacked JPG van 8 foto's · OM1R5855-OM1R5862 (8)"
     private var subtitle: String {
         guard let photo = model.previewPhoto else { return "" }
         var parts: [String] = []
-        if let shot = photo.shot { parts.append("Shot \(shot)") }
+        if let image = model.previewStackedImage {
+            parts.append("Stacked JPG van \(image.imageCount) foto's")
+        } else if let shot = photo.shot {
+            parts.append("Shot \(shot)")
+        }
         if let entry = model.preview.flatMap({ model.entry($0.entryKey) }) { parts.append(entry.name) }
         if let index = model.previewPhotos.firstIndex(of: photo) {
             parts.append("\(index + 1) van \(model.previewPhotos.count)")
@@ -65,6 +74,9 @@ struct PreviewView: View {
         ToolbarItem(placement: .status) {
             if let photo = model.previewPhoto {
                 HStack(spacing: 8) {
+                    if let image = model.previewStackedImage {
+                        StackedImageBadge(image: image)
+                    }
                     if isExcluded {
                         Badge(text: "Uit stack", systemImage: "minus.circle", tint: .orange)
                     }
@@ -86,7 +98,7 @@ struct PreviewView: View {
                         .monospacedDigit()
                         .frame(minWidth: 44)
                 }
-                .help("Wissel tussen passend en 100% (Z of klik op de foto). 100% = één pixel van de RAW"
+                .help("Wissel tussen passend en 100% (Z of klik op de foto). 100% = één pixel van de \(sourceName)"
                     + (model.previewIsFullResolution ? " (volledige resolutie geladen)." : "."))
                 Button { model.zoom(.zoomIn) } label: { Label("Inzoomen", systemImage: "plus.magnifyingglass") }
                     .help("Inzoomen (⌘+), of knijp met twee vingers op het trackpad")
@@ -98,32 +110,36 @@ struct PreviewView: View {
                     Label("DxO PhotoLab", systemImage: "slider.horizontal.3")
                 }
                 .disabled(model.photoLabURL == nil)
-                .help(model.photoLabURL == nil ? "DxO PhotoLab is niet gevonden." : "Open het origineel in DxO PhotoLab (⌘E)")
+                .help(model.photoLabURL == nil ? "DxO PhotoLab is niet gevonden."
+                    : "Open \(model.previewStackedImage == nil ? "het origineel" : "de stacked JPG") in DxO PhotoLab (⌘E)")
                 Button { model.reveal(photo) } label: { Label("Toon in Finder", systemImage: "folder") }
-                    .help("Toon het origineel in de Finder")
-                Button { model.toggleExclusionInPreview() } label: {
-                    Label(isExcluded ? "Terug in stack" : "Uit stack",
-                          systemImage: isExcluded ? "arrow.uturn.backward.circle" : "minus.circle")
+                    .help("Toon \(model.previewStackedImage == nil ? "het origineel" : "de stacked JPG") in de Finder")
+                // The stacked JPG is no photo of the stack: nothing to take out of it or to trash from here.
+                if model.previewStackedImage == nil {
+                    Button { model.toggleExclusionInPreview() } label: {
+                        Label(isExcluded ? "Terug in stack" : "Uit stack",
+                              systemImage: isExcluded ? "arrow.uturn.backward.circle" : "minus.circle")
+                    }
+                    .help(isExcluded ? "Zet de foto terug in de stack (⌫)"
+                        : "Haal de foto uit de stack; het origineel blijft staan (⌫)")
+                    let following = followingCount(after: photo)
+                    Button {
+                        model.requestTrash([photo], entryKey: entryKey, fromPreview: true)
+                    } label: {
+                        Label("Prullenmand", systemImage: "trash")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .help("Deze foto (.ORF, bijbestanden en DxO-TIFF) naar de Prullenmand (⌘⌫)")
+                    Button {
+                        model.requestTrashFromPreviewOnwards()
+                    } label: {
+                        Label("Deze + volgende", systemImage: "trash.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .disabled(following == 0)
+                    .help(following == 0 ? "Dit is de laatste foto van de stack; er komen geen foto's meer na."
+                        : "Deze foto en de \(following) foto's die erna komen in deze stack naar de Prullenmand (⇧⌘⌫)")
                 }
-                .help(isExcluded ? "Zet de foto terug in de stack (⌫)"
-                    : "Haal de foto uit de stack; het origineel blijft staan (⌫)")
-                let following = followingCount(after: photo)
-                Button {
-                    model.requestTrash([photo], entryKey: entryKey, fromPreview: true)
-                } label: {
-                    Label("Prullenmand", systemImage: "trash")
-                        .labelStyle(.titleAndIcon)
-                }
-                .help("Deze foto (.ORF, bijbestanden en DxO-TIFF) naar de Prullenmand (⌘⌫)")
-                Button {
-                    model.requestTrashFromPreviewOnwards()
-                } label: {
-                    Label("Deze + volgende", systemImage: "trash.fill")
-                        .labelStyle(.titleAndIcon)
-                }
-                .disabled(following == 0)
-                .help(following == 0 ? "Dit is de laatste foto van de stack; er komen geen foto's meer na."
-                    : "Deze foto en de \(following) foto's die erna komen in deze stack naar de Prullenmand (⇧⌘⌫)")
             }
         }
     }
@@ -140,7 +156,7 @@ struct PreviewView: View {
             Button("") { model.zoom(.zoomOut) }.keyboardShortcut("-", modifiers: .command)
             Button("") { model.toggleExclusionInPreview() }.keyboardShortcut(.delete, modifiers: [])
             Button("") {
-                if let photo = model.previewPhoto, let entryKey = model.preview?.entryKey {
+                if model.previewStackedImage == nil, let photo = model.previewPhoto, let entryKey = model.preview?.entryKey {
                     model.requestTrash([photo], entryKey: entryKey, fromPreview: true)
                 }
             }
@@ -166,7 +182,7 @@ struct PreviewView: View {
         }
         .overlay(alignment: .topTrailing) {
             if model.needsFullResolution && !model.previewIsFullResolution {
-                Label("RAW laden…", systemImage: "hourglass")
+                Label("\(sourceName) laden…", systemImage: "hourglass")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)

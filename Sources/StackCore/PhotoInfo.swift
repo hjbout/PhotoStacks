@@ -83,6 +83,12 @@ public struct PhotoInfo: Sendable, Equatable, Hashable, Identifiable {
         return Int(match.1)
     }
 
+    /// The file name without extension and trailing number, e.g. "OM1R" for "OM1R5855.ORF".
+    public var namePrefix: String {
+        guard let match = stem.firstMatch(of: #/(\d+)$/#) else { return stem }
+        return String(stem[..<match.range.lowerBound])
+    }
+
     /// The sequence part of the Drive Mode, e.g. ("ProCap SH2", 7) for "ProCap SH2, Shot 7; Anti-shock".
     public var sequence: (mode: String, shot: Int)? {
         PhotoInfo.sequence(from: driveMode)
