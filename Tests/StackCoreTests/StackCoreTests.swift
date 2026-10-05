@@ -591,15 +591,17 @@ private func plainRaw(_ values: [UInt16], offset: Int = 4) -> Data {
 }
 
 @Test func histogramCountsStopsBelowMaximum() {
-    // 4 pixels: at the maximum (stop 0), one stop below, 3 stops below, and at black.
-    let values: [UInt16] = [4095, 2048, 512, 0]
+    // 4 pixels: at the maximum (stop 0, which holds everything above half of it), one stop below that (1024–2047),
+    // 3 stops below that (256–511), and at black.
+    let values: [UInt16] = [4095, 1024, 256, 0]
     var data = Data()
     for v in values { data.append(UInt8(v & 0xff)); data.append(UInt8(v >> 8)) }
     let l = RawLayout(offset: 0, byteCount: 8, width: 2, height: 2, black: [0, 0, 0, 0], white: 4095,
                       cropLeft: 0, cropTop: 0, cropWidth: 2, cropHeight: 2, exposure: nil)
     let h = ExposureAnalyzer.stats(of: data, layout: l)?.stopHistogram ?? []
     #expect(h.count == ExposureAnalyzer.histogramStops)
-    #expect(h[0] == 0.25 && h[1] == 0.25 && h[3] == 0.25 && h[ExposureAnalyzer.histogramStops - 1] == 0.25)
+    // Black (counted as level 1) lies 11 stops below the 12-bit maximum; the stops beyond stay empty.
+    #expect(h[0] == 0.25 && h[1] == 0.25 && h[3] == 0.25 && h[11] == 0.25)
 }
 
 /// Which program (if any) made a file, given its name and software tags, for a stack of three photos from 1308 or a
