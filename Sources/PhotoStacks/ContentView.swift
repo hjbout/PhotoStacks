@@ -188,10 +188,15 @@ struct ContentView: View {
 
     /// Stacks with, when expanded, their photos underneath.
     private var rows: [StackRow] {
-        model.visibleEntries.flatMap { entry -> [StackRow] in
+        let showHeaders = model.showsFolderHeaders
+        var previous: String?
+        return model.visibleEntries.flatMap { entry -> [StackRow] in
             let photos = model.expanded.contains(entry.key)
                 ? entry.detected.photos.map { StackRow.photo($0, entryKey: entry.key) } : []
-            return [StackRow.stack(key: entry.key)] + photos
+            var header: [StackRow] = []
+            if showHeaders, previous != entry.directory { header = [.header(directory: entry.directory)] }
+            previous = entry.directory
+            return header + [StackRow.stack(key: entry.key)] + photos
         }
     }
 
@@ -218,6 +223,8 @@ struct ContentView: View {
                 toggle(key)
             case let .photo(photo, entryKey):
                 model.showPreview(photo, entryKey: entryKey)
+            case .header:
+                break
             }
         }
         .onDeleteCommand {
@@ -249,6 +256,9 @@ struct ContentView: View {
     }
 
     private func row(for id: String) -> StackRow? {
+        if id.hasPrefix("h:") {
+            return .header(directory: String(id.dropFirst(2)))
+        }
         if id.hasPrefix("s:") {
             return .stack(key: String(id.dropFirst(2)))
         }
@@ -264,6 +274,20 @@ struct ContentView: View {
     @ViewBuilder
     private func nameCell(_ row: StackRow) -> some View {
         switch row {
+        case let .header(directory):
+            HStack(spacing: 6) {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(.secondary)
+                Text(model.directoryName(directory))
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Text(model.directoryPath(directory))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            .help(model.directoryURL(directory)?.path ?? "")
         case let .stack(key):
             if let entry = model.entry(key) {
                 HStack(spacing: 10) {
@@ -336,6 +360,8 @@ struct ContentView: View {
     @ViewBuilder
     private func statusCell(_ row: StackRow) -> some View {
         switch row {
+        case .header:
+            EmptyView()
         case let .stack(key):
             if let entry = model.entry(key), let active = entry.active {
                 let missing = active.kind.reportsMissingShots ? active.missingShots : []
@@ -391,6 +417,8 @@ struct ContentView: View {
     @ViewBuilder
     private func measurementCell(_ row: StackRow) -> some View {
         switch row {
+        case .header:
+            EmptyView()
         case let .stack(key):
             if let entry = model.entry(key), let active = entry.active {
                 if active.kind.measuresExposure {
@@ -431,6 +459,8 @@ struct ContentView: View {
     @ViewBuilder
     private func actionCell(_ row: StackRow) -> some View {
         switch row {
+        case .header:
+            EmptyView()
         case let .stack(key):
             if let entry = model.entry(key) {
                 HStack(spacing: 10) {
@@ -541,6 +571,8 @@ struct ContentView: View {
     private func contextMenu(for ids: Set<String>) -> some View {
         if ids.count == 1, let id = ids.first, let row = row(for: id) {
             switch row {
+            case let .header(directory):
+                Button("Toon in Finder") { model.revealDirectory(directory) }
             case let .stack(key):
                 if let entry = model.entry(key) {
                     if let active = entry.active, let app = app(for: active.kind) {
@@ -591,9 +623,12 @@ struct ContentView: View {
 enum StackRow: Identifiable, Hashable {
     case stack(key: String)
     case photo(PhotoInfo, entryKey: String)
+    /// Header above the stacks of one folder.
+    case header(directory: String)
 
     var id: String {
         switch self {
+        case let .header(directory): "h:" + directory
         case let .stack(key): "s:" + key
         case let .photo(photo, _): "p:" + photo.fileName
         }

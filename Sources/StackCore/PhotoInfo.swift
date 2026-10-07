@@ -60,7 +60,7 @@ public enum StackKind: String, CaseIterable, Sendable, Hashable {
 
 /// Metadata of one .ORF file in the scanned folder.
 public struct PhotoInfo: Sendable, Equatable, Hashable, Identifiable {
-    /// File name relative to the scanned folder, e.g. "OM1R5855.ORF".
+    /// File name relative to the scanned folder, e.g. "OM1R5855.ORF" or, for a photo in a subfolder, "Sub/OM1R5855.ORF".
     public let fileName: String
     /// Drive Mode from the Olympus MakerNotes, e.g. "Focus Bracketing, Shot 5".
     public let driveMode: String
@@ -72,9 +72,24 @@ public struct PhotoInfo: Sendable, Equatable, Hashable, Identifiable {
 
     public var id: String { fileName }
 
-    /// File name without extension, e.g. "OM1R5855".
+    /// Subfolder of the scanned folder this photo is in ("" for the scanned folder itself).
+    public var directory: String {
+        (fileName as NSString).deletingLastPathComponent
+    }
+
+    /// File name without its subfolder, e.g. "OM1R5855.ORF".
+    public var baseName: String {
+        (fileName as NSString).lastPathComponent
+    }
+
+    /// This photo as seen from its own folder (its file name without the subfolder).
+    public var local: PhotoInfo {
+        PhotoInfo(fileName: baseName, driveMode: driveMode)
+    }
+
+    /// File name without folder and extension, e.g. "OM1R5855".
     public var stem: String {
-        (fileName as NSString).deletingPathExtension
+        (baseName as NSString).deletingPathExtension
     }
 
     /// Trailing number of the file name, e.g. 5855 for "OM1R5855.ORF".

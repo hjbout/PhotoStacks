@@ -5,7 +5,8 @@ import Foundation
 /// ("OM1R5855 bewerkt.tif") are not included.
 public enum Sidecars {
     public static func files(for photo: PhotoInfo, in folder: URL) -> [URL] {
-        files(forStem: photo.stem, first: photo.fileName, in: folder)
+        let own = photo.directory.isEmpty ? folder : folder.appendingPathComponent(photo.directory, isDirectory: true)
+        return files(forStem: photo.stem, first: photo.baseName, in: own)
     }
 
     /// Every regular file in `folder` named `<stem>.<anything>` (`first`, if given, at the front).

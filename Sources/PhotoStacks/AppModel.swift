@@ -17,6 +17,8 @@ struct StackEntry: Identifiable {
 
     var id: String { key }
     var name: String { (active ?? detected).folderName }
+    /// The subfolder of the scanned folder the stack is in ("" for the scanned folder itself).
+    var directory: String { detected.photos.first?.directory ?? "" }
 
 }
 
@@ -93,6 +95,8 @@ final class AppModel {
 
     /// The folder that is analysed for stacks.
     var folder: URL?
+    /// The folders (relative to `folder`, "" for itself) that have stacks, and the ones whose exclusions are stored.
+    private(set) var stackDirectories = Set<String>()
     /// Top of the folder tree in the sidebar, and the folders (by standardised path) that are expanded in it.
     var rootFolder: URL?
     var expandedFolders = Set<String>()
@@ -166,12 +170,38 @@ final class AppModel {
     /// The output folders (FocusStacks, HDRStacks …) that exist.
     var outputFolders: [URL] {
         guard let folder else { return [] }
-        return StackKind.allCases.map { LinkWriter.outputFolder(for: folder, kind: $0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        return stackDirectories.sorted().flatMap { directory in
+            StackKind.allCases.map { LinkWriter.outputFolder(for: Tree.url(folder, directory), kind: $0) }
+        }.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
     var hasOutputFolder: Bool { !outputFolders.isEmpty }
     var showReportDetails = false
     var activeStacks: [PhotoStack] { entries.compactMap(\.active) }
+
+    /// Headers with the folder name above the stacks, unless all stacks lie in the scanned folder itself.
+    var showsFolderHeaders: Bool {
+        !(stackDirectories.isEmpty || stackDirectories == [""])
+    }
+
+    func directoryURL(_ directory: String) -> URL? {
+        folder.map { Tree.url($0, directory) }
+    }
+
+    /// Name of a folder in the overview ("Sub2" for "Sub/Sub2", the scanned folder's own name for "").
+    func directoryName(_ directory: String) -> String {
+        directory.isEmpty ? (folder?.lastPathComponent ?? "") : (directory as NSString).lastPathComponent
+    }
+
+    /// Path of a folder, from the scanned folder on, shown after its name.
+    func directoryPath(_ directory: String) -> String {
+        guard let folder else { return directory }
+        return (Tree.url(folder, directory).path as NSString).abbreviatingWithTildeInPath
+    }
+
+    func revealDirectory(_ directory: String) {
+        guard let url = directoryURL(directory) else { return }
+        NSWorkspace.shared.open(url)
+    }
 
     /// The entries of the chosen kind.
     var visibleEntries: [StackEntry] {
@@ -286,14 +316,13 @@ final class AppModel {
         errorMessage = nil
         Task.detached {
             do {
-                let photos = try ExifToolReader.readPhotos(in: folder)
-                let result = StackDetector.detect(photos)
-                let excluded = ExclusionStore.load(for: folder)
-                let tiffs = DxOExports.scan(folder: folder, photos: result.stacks.flatMap(\.photos))
+                let photos = try Tree.readPhotos(under: folder)
+                let result = Tree.detect(photos)
+                let directories = Set(result.stacks.compactMap { $0.photos.first?.directory })
+                let excluded = Tree.loadExcluded(root: folder, directories: directories)
+                let tiffs = Tree.tiffs(root: folder, photos: result.stacks.flatMap(\.photos))
                 // Before the table shows up, so the rows start with the right thumbnail.
-                let stackedImages = StackedImages.scan(folder: folder, stacks: result.stacks.map { ($0.photos[0].fileName, $0) }) { names in
-                    (try? ExifToolReader.readStackedImages(files: names, in: folder)) ?? [:]
-                }
+                let stackedImages = Tree.stackedImages(root: folder, stacks: result.stacks.map { ($0.photos[0].fileName, $0) })
                 await self.finishScan(result, excluded: excluded, tiffs: tiffs, stackedImages: stackedImages, for: folder)
             } catch {
                 await self.fail(error, for: folder)
@@ -305,6 +334,7 @@ final class AppModel {
                             stackedImages: [String: StackedImage], for folder: URL) {
         guard folder == self.folder else { return }
         self.result = result
+        stackDirectories = Set(result.stacks.compactMap { $0.photos.first?.directory })
         self.excluded = excluded
         tiffIndex = tiffs
         entries = result.stacks.map {
@@ -390,7 +420,7 @@ final class AppModel {
 
     func refreshTIFFs() {
         guard let folder, !entries.isEmpty else { return }
-        let updated = DxOExports.scan(folder: folder, photos: entries.flatMap(\.detected.photos))
+        let updated = Tree.tiffs(root: folder, photos: entries.flatMap(\.detected.photos))
         if updated != tiffIndex { tiffIndex = updated }
     }
 
@@ -403,11 +433,7 @@ final class AppModel {
         resultsGeneration += 1
         let generation = resultsGeneration
         Task.detached(priority: .utility) {
-            let index = StackResults.scan(folder: folder, stacks: stacks) { names in
-                cache.tags(for: names, in: folder) { files in
-                    (try? ExifToolReader.readSoftware(files: files, in: folder)) ?? [:]
-                }
-            }
+            let index = Tree.results(root: folder, stacks: stacks, cache: cache)
             await self.applyResults(index, for: folder, generation: generation)
         }
     }
@@ -426,7 +452,7 @@ final class AppModel {
         frameJPGsGeneration += 1
         let generation = frameJPGsGeneration
         Task.detached(priority: .utility) {
-            let index = FrameJPGs.find(in: folder, photos: photos, cache: cache)
+            let index = Tree.frameJPGs(root: folder, photos: photos, cache: cache)
             await self.applyFrameJPGs(index, for: folder, generation: generation)
         }
     }
@@ -477,9 +503,9 @@ final class AppModel {
         guard let folder, !activeStacks.isEmpty else { return }
         phase = .writing
         refreshTIFFs()
-        let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
+        let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks, directories = stackDirectories
         syncQueue.async {
-            let report = LinkWriter.writeAll(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
+            let report = Tree.writeAll(stacks: stacks, root: folder, directories: directories, excluded: excluded, tiffs: tiffs)
             Task { @MainActor in self.finishWrite(report, for: folder) }
         }
     }
@@ -495,9 +521,9 @@ final class AppModel {
             }
         }
         guard hasStackFolders else { return }
-        let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
+        let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks, directories = stackDirectories
         syncQueue.async {
-            let report = LinkWriter.writeAll(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
+            let report = Tree.writeAll(stacks: stacks, root: folder, directories: directories, excluded: excluded, tiffs: tiffs)
             Task { @MainActor in
                 guard folder == self.folder else { return }
                 self.report = report
@@ -508,7 +534,8 @@ final class AppModel {
     /// The stack's folder in its kind's output folder, if it has been created.
     func stackFolder(for stack: PhotoStack) -> URL? {
         guard let folder else { return nil }
-        let url = LinkWriter.outputFolder(for: folder, kind: stack.kind).appendingPathComponent(stack.folderName, isDirectory: true)
+        let own = Tree.url(folder, stack.photos.first?.directory ?? "")
+        let url = LinkWriter.outputFolder(for: own, kind: stack.kind).appendingPathComponent(stack.folderName, isDirectory: true)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
             ? url : nil
@@ -533,11 +560,11 @@ final class AppModel {
     /// Helicon is already open (each stack gets its own Helicon window).
     private func openStackFolder(_ stack: PhotoStack, kind: SourceKind, in app: ResolvedApp) {
         guard let folder else { return }
-        let outputFolder = LinkWriter.outputFolder(for: folder, kind: stack.kind)
+        let outputFolder = LinkWriter.outputFolder(for: Tree.url(folder, stack.photos.first?.directory ?? ""), kind: stack.kind)
         refreshTIFFs()
-        let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks
+        let stacks = activeStacks, excluded = excluded, tiffs = tiffLinks, directories = stackDirectories
         syncQueue.async {
-            let report = LinkWriter.writeAll(stacks: stacks, in: folder, excluded: excluded, tiffs: tiffs)
+            let report = Tree.writeAll(stacks: stacks, root: folder, directories: directories, excluded: excluded, tiffs: tiffs)
             Task { @MainActor in
                 guard folder == self.folder else { return }
                 self.report = report
@@ -582,9 +609,9 @@ final class AppModel {
     /// The stack's photos for dragging: the links in its stack folder when that exists, otherwise the originals.
     func photoURLs(for stack: PhotoStack) -> [URL] {
         guard let folder else { return [] }
-        let base = stackFolder(for: stack) ?? folder
+        let links = stackFolder(for: stack)
         return stack.photos
-            .map { base.appendingPathComponent($0.fileName) }
+            .map { photo in links.map { $0.appendingPathComponent(photo.baseName) } ?? folder.appendingPathComponent(photo.fileName) }
             .filter { (try? $0.checkResourceIsReachable()) == true }
     }
 
@@ -665,7 +692,7 @@ final class AppModel {
         if isExcluded { updated.formUnion(names) } else { updated.subtract(names) }
         guard updated != excluded else { return }
         do {
-            try ExclusionStore.save(updated, for: folder)
+            try Tree.saveExcluded(updated, directories: Set(photos.map(\.directory)), root: folder)
         } catch {
             alertMessage = "Kon niet opslaan welke foto's uit de stack zijn: \(error.localizedDescription)"
             return
@@ -682,7 +709,7 @@ final class AppModel {
         refreshTIFFs()
         let present = photos.filter { entry.detected.photos.contains($0) }.compactMap { photo -> (PhotoInfo, [URL])? in
             let files = Sidecars.files(for: photo, in: folder)
-            return files.contains { $0.lastPathComponent == photo.fileName } ? (photo, files) : nil
+            return files.contains { $0.lastPathComponent == photo.baseName } ? (photo, files) : nil
         }
         guard !present.isEmpty else {
             alertMessage = "\(photos.first?.fileName ?? "De foto") is niet (meer) gevonden."
@@ -703,9 +730,11 @@ final class AppModel {
         // those belong to the original and must stay.
         let originals = Set(photos.flatMap { Sidecars.files(for: $0, in: folder) })
         let files = tiffs.flatMap { tiff -> [URL] in
-            let own = Sidecars.files(forStem: (tiff.fileName as NSString).deletingPathExtension, first: tiff.fileName, in: folder)
+            let tiffFolder = Tree.url(folder, (tiff.fileName as NSString).deletingLastPathComponent)
+            let tiffName = (tiff.fileName as NSString).lastPathComponent
+            let own = Sidecars.files(forStem: (tiffName as NSString).deletingPathExtension, first: tiffName, in: tiffFolder)
             return own.filter { url in
-                !originals.contains(url) || url.lastPathComponent.lowercased().hasPrefix(tiff.fileName.lowercased())
+                !originals.contains(url) || url.lastPathComponent.lowercased().hasPrefix(tiffName.lowercased())
             }
         }
         return (tiffs, files)
@@ -780,8 +809,8 @@ final class AppModel {
             syncIfNeeded()
             return
         }
-        let trashedNames = Set(trashed.map(\.lastPathComponent))
-        let removed = Set(request.photos.filter { trashedNames.contains($0.fileName) })
+        let trashedPaths = Set(trashed.map { $0.standardizedFileURL.path })
+        let removed = Set(request.photos.filter { trashedPaths.contains(folder.appendingPathComponent($0.fileName).standardizedFileURL.path) })
         guard folder == self.folder, !removed.isEmpty,
               let index = entries.firstIndex(where: { $0.key == request.entryKey })
         else { return }
@@ -803,7 +832,7 @@ final class AppModel {
         let names = Set(removed.map(\.fileName))
         if !excluded.isDisjoint(with: names) {
             excluded.subtract(names)
-            try? ExclusionStore.save(excluded, for: folder)
+            try? Tree.saveExcluded(excluded, directories: Set(removed.map(\.directory)), root: folder)
         }
         refreshTIFFs()
         refreshFrameJPGs()

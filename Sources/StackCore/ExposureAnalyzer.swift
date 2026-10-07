@@ -99,7 +99,13 @@ public enum ExposureAnalyzer {
     public static func measure(_ photos: [PhotoInfo], in folder: URL,
                                isCancelled: @escaping @Sendable () -> Bool = { false },
                                progress: @escaping @Sendable (Int) -> Void = { _ in }) -> [String: ExposureStats] {
-        guard let layouts = try? ExifToolReader.readRawLayouts(files: photos.map(\.fileName), in: folder) else { return [:] }
+        // exiftool reports bare file names, so the layouts are read per subfolder.
+        var layouts: [String: RawLayout] = [:]
+        for (directory, group) in Dictionary(grouping: photos, by: \.directory) {
+            let own = directory.isEmpty ? folder : folder.appendingPathComponent(directory, isDirectory: true)
+            guard let found = try? ExifToolReader.readRawLayouts(files: group.map(\.baseName), in: own) else { continue }
+            for (name, layout) in found { layouts[Tree.join(directory, name)] = layout }
+        }
         let lock = NSLock()
         var result: [String: ExposureStats] = [:]
         var done = 0
