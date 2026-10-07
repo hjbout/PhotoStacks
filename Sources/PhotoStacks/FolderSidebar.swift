@@ -76,5 +76,10 @@ struct FolderSidebar: View {
         }
         .padding(.leading, CGFloat(row.depth) * 14)
         .help(row.url.path)
+        .contextMenu {
+            Button("Toon in Finder") {
+                NSWorkspace.shared.open(row.url)
+            }
+        }
     }
 }
