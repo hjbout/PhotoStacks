@@ -1,15 +1,18 @@
 import AppKit
 import SwiftUI
 
-/// Floating, click-through window with a larger picture, shown to the right of the thumbnail under the pointer.
+/// Floating, click-through window with one or two larger pictures, shown to the right of the thumbnail under the pointer.
 @MainActor
 final class HoverPreviewPanel {
     static let shared = HoverPreviewPanel()
 
-    private static let maxSize = NSSize(width: 720, height: 540)
+    private static let maxHeight: CGFloat = 540
+    private static let maxWidth: CGFloat = 720
     private static let gap: CGFloat = 12
+    private static let spacing: CGFloat = 6
     private let panel: NSPanel
-    private let imageView = NSImageView()
+    private let container = NSView()
+    private var imageViews: [NSImageView] = []
 
     private init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -20,50 +23,91 @@ final class HoverPreviewPanel {
         panel.ignoresMouseEvents = true  // never steals the hover from the table
         panel.hidesOnDeactivate = true
         panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
-        imageView.imageScaling = .scaleAxesIndependently
-        imageView.wantsLayer = true
-        imageView.layer?.cornerRadius = 6
-        imageView.layer?.masksToBounds = true
-        imageView.layer?.borderWidth = 0.5
-        imageView.layer?.borderColor = NSColor.separatorColor.cgColor
-        panel.contentView = imageView
+        container.wantsLayer = true
+        panel.contentView = container
     }
 
-    /// Shows `image` to the right of `anchor` (a rect in screen coordinates), vertically centred on it and
-    /// kept inside the screen. It never covers the anchor.
-    func show(_ image: NSImage, besides anchor: NSRect) {
+    private func makeImageView(label: String?) -> NSImageView {
+        let view = NSImageView()
+        view.imageScaling = .scaleAxesIndependently
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 6
+        view.layer?.masksToBounds = true
+        view.layer?.borderWidth = 0.5
+        view.layer?.borderColor = NSColor.separatorColor.cgColor
+        if let label {
+            let text = NSTextField(labelWithString: label)
+            text.font = .systemFont(ofSize: 11, weight: .semibold)
+            text.textColor = .white
+            text.wantsLayer = true
+            text.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+            text.layer?.cornerRadius = 4
+            text.sizeToFit()
+            text.setFrameOrigin(NSPoint(x: 6, y: 6))
+            view.addSubview(text)
+        }
+        return view
+    }
+
+    /// Shows `images` side by side to the right of `anchor` (a rect in screen coordinates), vertically centred on
+    /// it and kept inside the screen. It never covers the anchor. `labels` are drawn in the corner of each picture.
+    func show(_ images: [NSImage], labels: [String], besides anchor: NSRect) {
+        guard !images.isEmpty else { return }
         let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1600, height: 1000)
-        let available = NSSize(width: max(visible.maxX - anchor.maxX - Self.gap * 2, 120), height: visible.height - 16)
-        let limit = NSSize(width: min(Self.maxSize.width, available.width), height: min(Self.maxSize.height, available.height))
-        let aspect = image.size.width > 0 && image.size.height > 0 ? image.size.width / image.size.height : 4.0 / 3
-        var size = NSSize(width: limit.width, height: limit.width / aspect)
-        if size.height > limit.height { size = NSSize(width: limit.height * aspect, height: limit.height) }
-        size = NSSize(width: size.width.rounded(), height: size.height.rounded())
+        let count = CGFloat(images.count)
+        let totalSpacing = Self.spacing * (count - 1)
+        let availableWidth = max(visible.maxX - anchor.maxX - Self.gap * 2, 120)
+        let limitWidth = min(Self.maxWidth * count, availableWidth) - totalSpacing
+        let limitHeight = min(Self.maxHeight, visible.height - 16)
+        let aspects = images.map { $0.size.width > 0 && $0.size.height > 0 ? $0.size.width / $0.size.height : 4.0 / 3 }
+        // One common height: as tall as the limits allow when the pictures stand side by side.
+        let height = min(limitHeight, limitWidth / aspects.reduce(0, +)).rounded()
+        let widths = aspects.map { ($0 * height).rounded() }
+        let size = NSSize(width: widths.reduce(0, +) + totalSpacing, height: height)
+
+        imageViews.forEach { $0.removeFromSuperview() }
+        imageViews = images.enumerated().map { index, image in
+            let view = makeImageView(label: index < labels.count ? labels[index] : nil)
+            view.image = image
+            return view
+        }
+        var x: CGFloat = 0
+        for (view, width) in zip(imageViews, widths) {
+            view.frame = NSRect(x: x, y: 0, width: width, height: height)
+            container.addSubview(view)
+            x += width + Self.spacing
+        }
 
         var origin = NSPoint(x: anchor.maxX + Self.gap, y: anchor.midY - size.height / 2)
         origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
-        imageView.image = image
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         panel.orderFrontRegardless()
     }
 
+    /// Screen rect of the thumbnail under the pointer; set by the hover tracker.
+    var anchor = NSRect.zero
     private var pending: Task<Void, Never>?
 
-    /// Loads the picture after a short delay (so moving across the table doesn't flash windows) and shows it.
-    func schedule(besides anchor: NSRect, image: @escaping () async -> NSImage?) {
+    /// Loads the pictures after `delay` (so moving across the table doesn't flash windows) and shows them.
+    func schedule(delay: Duration = .milliseconds(250), labels: [String] = [],
+                  images: @escaping () async -> [NSImage]) {
         pending?.cancel()
+        let anchor = self.anchor
         pending = Task {
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let picture = await image(), !Task.isCancelled else { return }
-            show(picture, besides: anchor)
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            let pictures = await images()
+            guard !Task.isCancelled, !pictures.isEmpty else { return }
+            show(pictures, labels: labels, besides: anchor)
         }
     }
 
     func hide() {
         pending?.cancel()
         panel.orderOut(nil)
-        imageView.image = nil
+        imageViews.forEach { $0.removeFromSuperview() }
+        imageViews = []
     }
 }
 
@@ -71,22 +115,29 @@ final class HoverPreviewPanel {
 struct HoverTracker: NSViewRepresentable {
     let onEnter: (NSRect) -> Void
     let onExit: () -> Void
+    /// Called while the pointer is inside whenever Shift is pressed or released.
+    var onShiftChange: ((Bool) -> Void)?
 
     func makeNSView(context: Context) -> TrackerView {
         let view = TrackerView()
         view.onEnter = onEnter
         view.onExit = onExit
+        view.onShiftChange = onShiftChange
         return view
     }
 
     func updateNSView(_ view: TrackerView, context: Context) {
         view.onEnter = onEnter
         view.onExit = onExit
+        view.onShiftChange = onShiftChange
     }
 
     final class TrackerView: NSView {
         var onEnter: ((NSRect) -> Void)?
         var onExit: (() -> Void)?
+        var onShiftChange: ((Bool) -> Void)?
+        private var monitor: Any?
+        private var shiftDown = false
         private var area: NSTrackingArea?
         private var inside = false
 
@@ -104,6 +155,16 @@ struct HoverTracker: NSViewRepresentable {
         override func mouseEntered(with event: NSEvent) {
             guard let window else { return }
             inside = true
+            shiftDown = NSEvent.modifierFlags.contains(.shift)
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                guard let self else { return event }
+                let shift = event.modifierFlags.contains(.shift)
+                if shift != self.shiftDown {
+                    self.shiftDown = shift
+                    self.onShiftChange?(shift)
+                }
+                return event
+            }
             onEnter?(window.convertToScreen(convert(bounds, to: nil)))
         }
 
@@ -116,6 +177,8 @@ struct HoverTracker: NSViewRepresentable {
         private func leave() {
             guard inside else { return }
             inside = false
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
             onExit?()
         }
     }

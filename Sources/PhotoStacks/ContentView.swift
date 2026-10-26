@@ -649,10 +649,31 @@ struct StackThumbnail: View {
                 model.showPreview(photo, entryKey: entry.key)
             }
             .background(HoverTracker { anchor in
-                HoverPreviewPanel.shared.schedule(besides: anchor) { await model.loadHoverImage(of: photo) }
+                HoverPreviewPanel.shared.anchor = anchor
+                showPreview(compare: NSEvent.modifierFlags.contains(.shift))
             } onExit: {
                 HoverPreviewPanel.shared.hide()
+            } onShiftChange: { shift in
+                showPreview(compare: shift)
             })
+    }
+
+    /// Hovering shows the stack's thumbnail photo larger; with Shift held, its first and last photo side by side.
+    private func showPreview(compare: Bool) {
+        let photo = model.thumbnailPhoto(for: entry)
+        let photos = (entry.active ?? entry.detected).photos
+        if compare, let first = photos.first, let last = photos.last, photos.count > 1 {
+            HoverPreviewPanel.shared.schedule(delay: .milliseconds(0), labels: ["Eerste", "Laatste"]) {
+                async let a = model.loadHoverImage(of: first)
+                async let b = model.loadHoverImage(of: last)
+                guard let a = await a, let b = await b else { return [] }
+                return [a, b]
+            }
+        } else {
+            HoverPreviewPanel.shared.schedule {
+                await model.loadHoverImage(of: photo).map { [$0] } ?? []
+            }
+        }
     }
 }
 
