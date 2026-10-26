@@ -16,6 +16,8 @@ struct ZoomCommand: Equatable {
 /// zoom and position unchanged when the sharper image arrives or when stepping to the next photo.
 struct ZoomableImageView: NSViewRepresentable {
     let image: NSImage?
+    /// Transparent picture of the same size with the sharp areas in red (focus peaking), drawn over the image.
+    var overlay: NSImage?
     let pixelSize: CGSize
     let command: ZoomCommand
     /// Magnification (1 = 100%) and whether the image is fitted to the view.
@@ -28,6 +30,7 @@ struct ZoomableImageView: NSViewRepresentable {
     func updateNSView(_ view: ZoomScrollView, context: Context) {
         view.onZoomChange = onZoomChange
         view.show(image, pixelSize: pixelSize)
+        view.showOverlay(overlay)
         view.apply(command)
     }
 }
@@ -37,6 +40,7 @@ final class ZoomScrollView: NSScrollView {
 
     var onZoomChange: ((Double, Bool) -> Void)?
     private let imageView = NSImageView()
+    private let overlayView = OverlayView()
     private var isFit = true
     private var lastCommandID = 0
 
@@ -53,6 +57,9 @@ final class ZoomScrollView: NSScrollView {
         maxMagnification = Self.maximumZoom
         imageView.imageScaling = .scaleAxesIndependently
         imageView.imageFrameStyle = .none
+        overlayView.autoresizingMask = [.width, .height]
+        overlayView.isHidden = true
+        imageView.addSubview(overlayView)
         documentView = imageView
         imageView.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked(_:))))
         NotificationCenter.default.addObserver(self, selector: #selector(magnificationEnded),
@@ -73,6 +80,12 @@ final class ZoomScrollView: NSScrollView {
         imageView.frame = NSRect(origin: .zero, size: size)
         isFit = true
         needsLayout = true
+    }
+
+    func showOverlay(_ overlay: NSImage?) {
+        overlayView.show(overlay)
+        overlayView.isHidden = overlay == nil
+        overlayView.frame = imageView.bounds
     }
 
     func apply(_ command: ZoomCommand) {
@@ -157,4 +170,28 @@ final class CenteringClipView: NSClipView {
         if rect.height > document.height { rect.origin.y = (document.height - rect.height) / 2 }
         return rect
     }
+}
+
+/// Draws the focus peaking marks sharp when enlarged and smoothed when reduced (so thin lines stay visible), and leaves clicks to the view below it.
+final class OverlayView: NSView {
+    private var shown: NSImage?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.magnificationFilter = .nearest
+        layer?.minificationFilter = .trilinear
+        layer?.contentsGravity = .resize
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show(_ image: NSImage?) {
+        guard shown !== image else { return }
+        shown = image
+        layer?.contents = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

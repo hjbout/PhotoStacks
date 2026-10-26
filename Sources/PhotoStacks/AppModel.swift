@@ -928,6 +928,57 @@ final class AppModel {
         return previewMagnification > images.preview.size.width / images.pixelSize.width * 1.02
     }
 
+    // MARK: - Focus peaking
+
+    private static let focusPeakingKey = "focusPeaking"
+    /// Red marking of the sharp areas in the preview.
+    var focusPeaking = UserDefaults.standard.bool(forKey: AppModel.focusPeakingKey)
+    private var peaking: (name: String, full: Bool, neighbours: Int, image: NSImage)?
+
+    func toggleFocusPeaking() {
+        focusPeaking.toggle()
+        UserDefaults.standard.set(focusPeaking, forKey: Self.focusPeakingKey)
+        if !focusPeaking { peaking = nil }
+    }
+
+    /// The marking for the picture that is shown now; nil while it is being made or when it is off.
+    var previewPeaking: NSImage? {
+        // The marking of the embedded preview stays until the one of the full RAW is ready.
+        guard focusPeaking, let name = preview?.fileName, let peaking, peaking.name == name else { return nil }
+        return peaking.image
+    }
+
+    /// The previous and next frame of the stack at the size of the shown picture: the marking only shows where the
+    /// previewed frame is sharper than these. Empty for the stacked JPG.
+    private var peakingNeighbours: [NSImage] {
+        guard previewStackedImage == nil, let photo = previewPhoto, let image = previewImage else { return [] }
+        return previewNeighbours(of: photo).compactMap { neighbour in
+            let other = fullImageCache[neighbour.fileName] ?? imageCache[neighbour.fileName]?.preview
+            return other?.size == image.size ? other : nil
+        }
+    }
+
+    var peakingNeighbourCount: Int { focusPeaking ? peakingNeighbours.count : 0 }
+
+    /// Makes the marking for the shown picture (the embedded preview, later the full RAW) in the background.
+    func loadPeaking() async {
+        guard focusPeaking, let name = preview?.fileName, let image = previewImage else { return }
+        let full = previewIsFullResolution
+        // Wait for the neighbouring frames, so the marking is made once and doesn't change when they arrive.
+        let neighbours = peakingNeighbours
+        if previewStackedImage == nil, let photo = previewPhoto, neighbours.count < previewNeighbours(of: photo).count { return }
+        if let peaking, peaking.name == name, peaking.full == full, peaking.neighbours == neighbours.count { return }
+        let overlay = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+            guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                  let mask = FocusPeaking.overlay(for: cgImage, neighbours: neighbours.compactMap {
+                      $0.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                  }) else { return nil }
+            return NSImage(cgImage: mask, size: NSSize(width: mask.width, height: mask.height))
+        }.value
+        guard let overlay, focusPeaking, preview?.fileName == name, previewIsFullResolution == full else { return }
+        peaking = (name, full, neighbours.count, overlay)
+    }
+
     func zoom(_ kind: ZoomCommand.Kind) {
         zoomCommand = ZoomCommand(id: zoomCommand.id + 1, kind: kind)
     }

@@ -19,6 +19,9 @@ struct PreviewView: View {
             .toolbar { toolbar }
             .background { shortcuts }
             .task(id: model.preview?.fileName) { await model.loadPreviewImage() }
+            .task(id: "\(model.preview?.fileName ?? "")|\(model.previewIsFullResolution)|\(model.previewImage != nil)|\(model.focusPeaking)|\(model.peakingNeighbourCount)") {
+                await model.loadPeaking()
+            }
             .onChange(of: model.preview == nil) { _, isClosed in
                 if isClosed { dismissWindow(id: Self.windowID) }
             }
@@ -90,6 +93,15 @@ struct PreviewView: View {
             }
         }
         ToolbarItem(placement: .primaryAction) {
+            Button { model.toggleFocusPeaking() } label: {
+                Label("Scherpte", systemImage: "scope")
+                    .symbolVariant(model.focusPeaking ? .fill : .none)
+                    .foregroundStyle(model.focusPeaking ? Color.red : Color.primary)
+            }
+            .help(model.focusPeaking ? "Verberg de scherptemarkering (P)"
+                : "Markeer in rood waar de foto scherp is (P)")
+        }
+        ToolbarItem(placement: .primaryAction) {
             ControlGroup {
                 Button { model.zoom(.zoomOut) } label: { Label("Uitzoomen", systemImage: "minus.magnifyingglass") }
                     .help("Uitzoomen (⌘−)")
@@ -150,6 +162,7 @@ struct PreviewView: View {
             Button("") { model.movePreview(by: -1) }.keyboardShortcut(.leftArrow, modifiers: [])
             Button("") { model.movePreview(by: 1) }.keyboardShortcut(.rightArrow, modifiers: [])
             Button("") { model.zoom(.toggle) }.keyboardShortcut("z", modifiers: [])
+            Button("") { model.toggleFocusPeaking() }.keyboardShortcut("p", modifiers: [])
             Button("") { if let photo = model.previewPhoto { openInPhotoLab(photo) } }
                 .keyboardShortcut("e", modifiers: .command)
             Button("") { model.zoom(.zoomIn) }.keyboardShortcut("=", modifiers: .command)
@@ -171,7 +184,7 @@ struct PreviewView: View {
 
     private var imageArea: some View {
         // Stays in place while stepping through the stack, so zoom and position are kept.
-        ZoomableImageView(image: model.previewImage, pixelSize: model.previewPixelSize ?? .zero,
+        ZoomableImageView(image: model.previewImage, overlay: model.previewPeaking, pixelSize: model.previewPixelSize ?? .zero,
                           command: model.zoomCommand) { magnification, isFit in
             model.previewZoomChanged(magnification, isFit: isFit)
         }
