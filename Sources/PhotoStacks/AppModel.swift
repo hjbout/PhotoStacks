@@ -630,6 +630,22 @@ final class AppModel {
         return open(fileName: fileName, with: app.url, appName: app.name)
     }
 
+    /// Opens a result in ApolloOne (not a configurable role: it is only offered in the badges' context menu).
+    func openInApolloOne(fileName: String) {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.anogeissus.ApolloOne") else {
+            alertMessage = "ApolloOne is niet gevonden."
+            return
+        }
+        open(fileName: fileName, with: url, appName: "ApolloOne")
+    }
+
+    /// Selects a result (a file of the scanned folder) in the Finder.
+    func revealResult(fileName: String) {
+        guard let folder else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folder.appendingPathComponent(fileName)])
+    }
+
+    @discardableResult
     private func open(fileName: String, with appURL: URL, appName: String) -> Bool {
         guard let folder else { return false }
         let url = folder.appendingPathComponent(fileName)

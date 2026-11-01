@@ -369,12 +369,16 @@ struct ContentView: View {
                 HStack(spacing: 4) {
                     if let stackedImage = entry.stackedImage {
                         StackedImageBadge(image: stackedImage, appName: model.appName(for: .result),
-                                         canOpen: model.apps[.result] != nil) { model.openResult(fileName: $0) }
+                                         canOpen: model.apps[.result] != nil,
+                                         open: { model.openResult(fileName: $0) },
+                                         reveal: { model.revealResult(fileName: $0) },
+                                         openInApolloOne: { model.openInApolloOne(fileName: $0) })
                     }
                     ResultBadges(results: model.results(for: entry), appName: model.appName(for: .result),
-                                 canOpen: model.apps[.result] != nil) {
-                        model.openResult(fileName: $0)
-                    }
+                                 canOpen: model.apps[.result] != nil,
+                                 open: { model.openResult(fileName: $0) },
+                                 reveal: { model.revealResult(fileName: $0) },
+                                 openInApolloOne: { model.openInApolloOne(fileName: $0) })
                     if tiffs.found > 0 {
                         Badge(text: "TIFF \(tiffs.found)/\(tiffs.total)", systemImage: "photo.stack",
                               tint: tiffs.found == tiffs.total ? .purple : .orange)

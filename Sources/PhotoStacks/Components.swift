@@ -135,6 +135,8 @@ struct StackedImageBadge: View {
     var appName = ""
     var canOpen = false
     var open: ((String) -> Void)?
+    var reveal: ((String) -> Void)?
+    var openInApolloOne: ((String) -> Void)?
 
     var body: some View {
         let badge = Badge(text: "Stacked JPG", systemImage: "camera", tint: .teal)
@@ -142,8 +144,8 @@ struct StackedImageBadge: View {
             + "\(image.fileName). Dat beeld is de miniatuur van de stack en staat vooraan in het voorbeeldvenster."
         if let open {
             Menu {
-                Button("Open in \(appName)") { open(image.fileName) }
-                    .disabled(!canOpen)
+                ResultMenuItems(fileNames: [image.fileName], appName: appName, canOpen: canOpen, open: open,
+                                reveal: reveal, openInApolloOne: openInApolloOne)
             } label: {
                 badge
             }
@@ -151,6 +153,10 @@ struct StackedImageBadge: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
+            .contextMenu {
+                ResultMenuItems(fileNames: [image.fileName], appName: appName, canOpen: canOpen, open: open,
+                                reveal: reveal, openInApolloOne: openInApolloOne)
+            }
             .help(info + "\nKlik om de JPG in \(appName) te openen.")
         } else {
             badge.help(info)
@@ -181,6 +187,38 @@ struct ExposureBadges: View {
     }
 }
 
+/// Items of a result badge's menu (shown on click and on right-click): open in the results app, open in ApolloOne,
+/// show in the Finder. With several files every action gets a section listing them.
+struct ResultMenuItems: View {
+    let fileNames: [String]
+    var appName = ""
+    var canOpen = false
+    var open: ((String) -> Void)?
+    var reveal: ((String) -> Void)?
+    var openInApolloOne: ((String) -> Void)?
+
+    var body: some View {
+        if let open {
+            group("Open in \(appName)", open).disabled(!canOpen)
+        }
+        if let openInApolloOne { group("Open in ApolloOne", openInApolloOne) }
+        if let reveal { group("Toon in Finder", reveal) }
+    }
+
+    @ViewBuilder
+    private func group(_ title: String, _ action: @escaping (String) -> Void) -> some View {
+        if fileNames.count == 1, let name = fileNames.first {
+            Button(title) { action(name) }
+        } else {
+            Section(title) {
+                ForEach(fileNames, id: \.self) { name in
+                    Button(name) { action(name) }
+                }
+            }
+        }
+    }
+}
+
 /// "Helicon" / "Photomatix" / "Luminar Neo": the stack already has images made by that program (found next to the
 /// originals). Clicking the badge lists them, to open one in the app chosen for results (DxO PhotoLab by default).
 struct ResultBadges: View {
@@ -188,6 +226,8 @@ struct ResultBadges: View {
     let appName: String
     let canOpen: Bool
     let open: (String) -> Void
+    var reveal: ((String) -> Void)?
+    var openInApolloOne: ((String) -> Void)?
 
     var body: some View {
         ForEach(ResultApp.allCases, id: \.self) { app in
@@ -201,15 +241,14 @@ struct ResultBadges: View {
                 let names = files.map(\.fileName).joined(separator: "\n")
                 if images.isEmpty {
                     // Only .hdr / .exr: PhotoLab can't open those.
-                    badge.help("Alleen een tussenresultaat (.hdr/.exr) van \(programName) gevonden:\n" + names)
+                    badge
+                        .contextMenu { ResultMenuItems(fileNames: files.map(\.fileName), reveal: reveal) }
+                        .help("Alleen een tussenresultaat (.hdr/.exr) van \(programName) gevonden:\n" + names)
                 } else {
+                    let items = ResultMenuItems(fileNames: images.map(\.fileName), appName: appName, canOpen: canOpen,
+                                                open: open, reveal: reveal, openInApolloOne: openInApolloOne)
                     Menu {
-                        Section("Open in \(appName)") {
-                            ForEach(images, id: \.fileName) { image in
-                                Button(image.fileName) { open(image.fileName) }
-                                    .disabled(!canOpen)
-                            }
-                        }
+                        items
                     } label: {
                         badge
                     }
@@ -217,6 +256,7 @@ struct ResultBadges: View {
                     .buttonStyle(.plain)
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    .contextMenu { items }
                     .help("Resultaat van \(programName) gevonden (nieuwste eerst), klik om er een in \(appName) te openen:\n" + names)
                 }
             }
