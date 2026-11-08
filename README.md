@@ -78,6 +78,7 @@ naar de Prullenmand.
     (.xmp, .on1, .JPG, .ORI …) naar de Prullenmand (terug te zetten via Finder). Nooit definitief verwijderen.
   - **Deze + volgende** (⇧⌘⌫, aparte knop): idem voor deze foto en alle foto's die erna komen in dezelfde stack
     (handig voor een onscherpe staart); andere stacks blijven ongemoeid.
+  - **Deze + eerdere** (⌥⌘⌫, aparte knop): idem voor deze foto en alle foto's die ervoor komen in dezelfde stack.
   - Bestaan de soortmappen al, dan worden links en mapnamen meteen bijgewerkt.
 - DxO PhotoLab-TIFFs: exporteer je de foto's van een stack als TIFF naar dezelfde map (bv. `OM1R5855_DxO.tif`),
   dan komen er links naar in `<soortmap>/<stack>/TIFF/`. Herkend worden TIFFs met exact de fotonaam

@@ -134,7 +134,17 @@ struct PreviewView: View {
                     }
                     .help(isExcluded ? "Zet de foto terug in de stack (⌫)"
                         : "Haal de foto uit de stack; het origineel blijft staan (⌫)")
+                    let earlier = earlierCount(before: photo)
                     let following = followingCount(after: photo)
+                    Button {
+                        model.requestTrashFromPreviewBackwards()
+                    } label: {
+                        Label("Deze + eerdere", systemImage: "trash.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .disabled(earlier == 0)
+                    .help(earlier == 0 ? "Dit is de eerste foto van de stack; er zijn geen eerdere foto's."
+                        : "Deze foto en de \(earlier) foto's die ervoor komen in deze stack naar de Prullenmand (⌥⌘⌫)")
                     Button {
                         model.requestTrash([photo], entryKey: entryKey, fromPreview: true)
                     } label: {
@@ -175,6 +185,7 @@ struct PreviewView: View {
             }
             .keyboardShortcut(.delete, modifiers: .command)
             Button("") { model.requestTrashFromPreviewOnwards() }.keyboardShortcut(.delete, modifiers: [.command, .shift])
+            Button("") { model.requestTrashFromPreviewBackwards() }.keyboardShortcut(.delete, modifiers: [.command, .option])
             Button("") { dismissWindow(id: Self.windowID) }.keyboardShortcut(.cancelAction)
         }
         .opacity(0)
@@ -208,6 +219,11 @@ struct PreviewView: View {
 }
 
 extension PreviewView {
+    /// Number of photos before `photo` in the previewed stack.
+    func earlierCount(before photo: PhotoInfo) -> Int {
+        model.previewPhotos.firstIndex(of: photo) ?? 0
+    }
+
     /// Number of photos after `photo` in the previewed stack.
     func followingCount(after photo: PhotoInfo) -> Int {
         guard let index = model.previewPhotos.firstIndex(of: photo) else { return 0 }

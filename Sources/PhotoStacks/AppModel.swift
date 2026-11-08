@@ -801,6 +801,12 @@ final class AppModel {
         requestTrash(Array(previewPhotos[index...]), entryKey: preview.entryKey, fromPreview: true)
     }
 
+    /// The previewed photo and all photos before it in the same stack (also those taken out of the stack).
+    func requestTrashFromPreviewBackwards() {
+        guard let preview, let index = previewPhotos.firstIndex(where: { $0.fileName == preview.fileName }) else { return }
+        requestTrash(Array(previewPhotos[...index]), entryKey: preview.entryKey, fromPreview: true)
+    }
+
     func confirmTrash(_ request: TrashRequest) {
         guard let folder else { return }
         trashRequest = nil
