@@ -7,6 +7,8 @@ public struct LinkReport: Sendable {
     public var foldersRenamed = 0
     public var brokenLinksRemoved = 0
     public var excludedLinksRemoved = 0
+    /// Links taken out of a stack folder because their photo now belongs to another folder (merged stacks).
+    public var movedLinksRemoved = 0
     public var tiffLinksCreated = 0
     public var tiffLinksRemoved = 0
     public var foldersRemoved = 0
@@ -22,6 +24,7 @@ public struct LinkReport: Sendable {
         foldersRenamed += other.foldersRenamed
         brokenLinksRemoved += other.brokenLinksRemoved
         excludedLinksRemoved += other.excludedLinksRemoved
+        movedLinksRemoved += other.movedLinksRemoved
         tiffLinksCreated += other.tiffLinksCreated
         tiffLinksRemoved += other.tiffLinksRemoved
         foldersRemoved += other.foldersRemoved
@@ -33,8 +36,9 @@ public struct LinkReport: Sendable {
 /// each kind of sequence has its own output folder (FocusStacks, HDRStacks …) next to the originals.
 ///
 /// Nothing outside the output folder is ever touched. Inside it, the only things ever removed are the app's own
-/// links (a symlink "<name>" -> "../../<name>") whose original is gone or that the user took out of the stack
-/// (`excluded`), and stack folders that are empty afterwards (apart from a Finder .DS_Store). Each stack folder can
+/// links (a symlink "<name>" -> "../../<name>") whose original is gone, that the user took out of the stack
+/// (`excluded`) or whose photo moved to another stack folder, and stack folders that are empty afterwards (apart from a
+/// Finder .DS_Store). Each stack folder can
 /// have a subfolder `TIFF` with links to the stack's DxO TIFFs (`tiffs`: photo file name -> TIFF file name), managed
 /// the same way. Existing stack folders are recognised by the photos
 /// their links point to and renamed when the stack's name changed. Existing items are never overwritten.
@@ -136,6 +140,33 @@ public enum LinkWriter {
         // 2. Match each stack to the existing folder whose links overlap most with it.
         let folderForStack = match(stacks, to: folders)
         let matchedFolders = Set(folderForStack.values)
+
+        // 2a. Two stacks became one (e.g. numbering that starts again is now recognised): the folder that lost the match
+        // still links photos that now belong to the other folder. Those links are made there in steps 6 and 7.
+        let stackPhotos = Set(stacks.flatMap { $0.photos.map(\.fileName) })
+        let stackTiffs = Set(stacks.flatMap { $0.photos.compactMap { tiffs[$0.fileName] } })
+        for index in folders.indices where !matchedFolders.contains(index) {
+            for name in folders[index].validLinks.intersection(stackPhotos).sorted() {
+                folders[index].validLinks.remove(name)
+                if dryRun || unlink(path(folders[index].name, name)) == 0 {
+                    report.movedLinksRemoved += 1
+                } else {
+                    report.problems.append("Link \(folders[index].name)/\(name) verwijderen mislukt: \(lastError())")
+                    folders[index].otherItems.append(name)
+                }
+            }
+            guard var tiff = folders[index].tiff else { continue }
+            for name in tiff.validLinks.intersection(stackTiffs).sorted() {
+                tiff.validLinks.remove(name)
+                if dryRun || unlink(path(folders[index].name, tiffFolder, name)) == 0 {
+                    report.tiffLinksRemoved += 1
+                } else {
+                    report.problems.append("Link \(folders[index].name)/\(tiffFolder)/\(name) verwijderen mislukt: \(lastError())")
+                    tiff.otherItems.append(name)
+                }
+            }
+            folders[index].tiff = tiff
+        }
 
         // 3. Remove unmatched folders that are now empty.
         for (index, existing) in folders.enumerated()

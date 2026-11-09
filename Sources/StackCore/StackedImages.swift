@@ -49,7 +49,7 @@ public enum StackedImages {
         for candidate in found.sorted(by: { $0.fileName < $1.fileName }) {
             let (key, stack) = stacks[candidate.stackIndex]
             guard result[key] == nil, let count = counts[candidate.fileName], let base = base(of: stack),
-                  candidate.counter == base + count + 1,
+                  PhotoInfo.counterSteps(from: base, to: candidate.counter) == count + 1,
                   let attributes = try? fm.attributesOfItem(atPath: folder.appendingPathComponent(candidate.fileName).path),
                   attributes[.type] as? FileAttributeType == .typeRegular
             else { continue }
@@ -71,8 +71,12 @@ public enum StackedImages {
             guard let base = base(of: stack), let prefix = stack.photos.first?.namePrefix.lowercased(),
                   let last = stack.photos.last?.counter
             else { continue }
-            for jpg in jpgs where jpg.prefix == prefix && jpg.counter > last && jpg.counter <= base + maxImages + 1 {
-                result.append(Candidate(fileName: jpg.name, stackIndex: index, counter: jpg.counter))
+            let lastSteps = PhotoInfo.counterSteps(from: base, to: last)
+            for jpg in jpgs where jpg.prefix == prefix {
+                let steps = PhotoInfo.counterSteps(from: base, to: jpg.counter)
+                if steps > lastSteps && steps <= maxImages + 1 {
+                    result.append(Candidate(fileName: jpg.name, stackIndex: index, counter: jpg.counter))
+                }
             }
         }
         return result

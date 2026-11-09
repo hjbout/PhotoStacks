@@ -51,12 +51,39 @@ public struct DetectionResult: Sendable {
 }
 
 public enum StackDetector {
-    /// Sorts photos by the numbering in their file names (natural order, so "P9120001" < "PA010001").
+    /// Sorts photos by the numbering in their file names (natural order, so "P9120001" < "PA010001"), with the photos
+    /// taken after the camera's numbering started again behind the ones before it.
     public static func sorted(_ photos: [PhotoInfo]) -> [PhotoInfo] {
-        photos.sorted { $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending }
+        let byName = photos.sorted { $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending }
+        var result: [PhotoInfo] = []
+        var start = 0
+        while start < byName.count {
+            var end = start + 1
+            while end < byName.count, byName[end].namePrefix == byName[start].namePrefix { end += 1 }
+            result += numberingRestartRemoved(Array(byName[start..<end]))
+            start = end
+        }
+        return result
     }
 
-    /// Walks the photos in file name order. A stack continues while the next photo has the same sequence mode
+    /// When the numbering started again (…9999, 0001…) the file names sort the later photos first. That is the case when
+    /// the name order is the time order turned around one point: the time goes back exactly once, the last name isn't
+    /// newer than the first, and the first number follows the last one in the camera's cycle (not exactly, photos can be
+    /// deleted). The point itself is found from the times, which only have whole seconds; the order within each part
+    /// stays the file name order. Anything else (no times, a changed camera clock) is left alone.
+    private static func numberingRestartRemoved(_ photos: [PhotoInfo]) -> [PhotoInfo] {
+        let times = photos.compactMap(\.captureTime)
+        guard times.count == photos.count, let first = times.first, let last = times.last, last <= first,
+              let lastCounter = photos.last?.counter, let firstCounter = photos.first?.counter,
+              PhotoInfo.counterSteps(from: lastCounter, to: firstCounter) < PhotoInfo.counterCycle / 2
+        else { return photos }
+        let backwards = times.indices.dropLast().filter { times[$0] > times[$0 + 1] }
+        guard backwards.count == 1 else { return photos }
+        let restart = backwards[0] + 1
+        return Array(photos[restart...] + photos[..<restart])
+    }
+
+    /// Walks the photos in the order they were taken. A stack continues while the next photo has the same sequence mode
     /// (e.g. "AE Bracketing") with a higher shot number. Gaps (deleted photos) are allowed as long as file
     /// counter minus shot number stays the same, so a following stack whose first shots were deleted is not
     /// merged into the previous one.
@@ -100,6 +127,7 @@ public enum StackDetector {
 
     private static func sameOffset(_ a: PhotoInfo, _ shotA: Int, _ b: PhotoInfo, _ shotB: Int) -> Bool {
         guard let counterA = a.counter, let counterB = b.counter else { return true }
-        return counterA - shotA == counterB - shotB
+        // A multiple of the cycle apart: the numbering started again within the stack (19999 Shot 42, 10001 Shot 43).
+        return (counterA - shotA - (counterB - shotB)) % PhotoInfo.counterCycle == 0
     }
 }

@@ -785,3 +785,112 @@ private func resultApp(_ name: String, tags: String = "", hdr: Bool = true) -> R
     let tagged = try ExifToolReader.parseDriveAndStack(json: Data(#"[{"FileName":"a.JPG","DriveMode":"Sequential","StackedImage":"Focus-stacked (8 images)"},{"FileName":"b.JPG"}]"#.utf8))
     #expect(tagged["a.JPG"]?.stackedImage == "Focus-stacked (8 images)" && tagged["b.JPG"]?.driveMode == "")
 }
+
+// MARK: - Numbering that starts again (…9999, 0001…)
+
+private func om(_ counter: Int, _ shot: Int?, _ time: String) -> PhotoInfo {
+    PhotoInfo(fileName: "_OM\(counter).ORF", driveMode: shot.map { "Focus Bracketing, Shot \($0)" } ?? "Single Shot",
+              captureTime: "2026:11:08 \(time)")
+}
+
+@Test func stackOverTheNumberingRestartStaysTogether() {
+    // The last and first number of the cycle fall in the same second, so only the time of the other photos tells.
+    let photos = [om(10001, 3, "15:14:56"), om(10002, 4, "15:14:57"), om(10003, nil, "16:02:49"),
+                  om(19956, 1, "15:13:10"), om(19957, 2, "15:13:12"),
+                  om(19998, 1, "15:14:55"), om(19999, 2, "15:14:56")]
+    let result = StackDetector.detect(photos)
+    #expect(result.stacks.map(names) == [["_OM19956", "_OM19957"], ["_OM19998", "_OM19999", "_OM10001", "_OM10002"]])
+    #expect(result.stacks[1].folderName == "_OM19998-_OM10002 (4)")
+    #expect(result.stacks[1].missingShots.isEmpty)
+    #expect(result.loosePhotos.isEmpty)
+}
+
+@Test func deletedPhotosAroundTheNumberingRestartKeepTheStack() {
+    // 19999 (Shot 2) and 10001 (Shot 3) are gone.
+    let photos = [om(10002, 4, "15:14:57"), om(10003, 5, "15:14:58"), om(19998, 1, "15:14:55")]
+    #expect(StackDetector.detect(photos).stacks.map(names) == [["_OM19998", "_OM10002", "_OM10003"]])
+}
+
+@Test func nextStackAfterTheNumberingRestartIsNotMerged() {
+    let backToBack = [om(10001, 1, "15:15:10"), om(10002, 2, "15:15:11"), om(19998, 1, "15:14:55"), om(19999, 2, "15:14:56")]
+    #expect(StackDetector.detect(backToBack).stacks.map(names) == [["_OM19998", "_OM19999"], ["_OM10001", "_OM10002"]])
+    // The next stack lost its first two shots, so the numbers don't line up.
+    let firstShotsDeleted = [om(10003, 3, "15:15:10"), om(10004, 4, "15:15:11"), om(19998, 1, "15:14:55"), om(19999, 2, "15:14:56")]
+    #expect(StackDetector.detect(firstShotsDeleted).stacks.map(names) == [["_OM19998", "_OM19999"], ["_OM10003", "_OM10004"]])
+}
+
+@Test func withoutTimesTheFileNameOrderStays() {
+    let photos = [fb(19999, 2), fb(19998, 1), fb(10001, 3), fb(10002, 4)]
+    #expect(StackDetector.detect(photos).stacks.map(names) == [["OM1R10001", "OM1R10002"], ["OM1R19998", "OM1R19999"]])
+}
+
+@Test func aCameraClockSetBackIsNoNumberingRestart() {
+    let photos = [om(11001, nil, "12:00:00"), om(11002, nil, "13:00:00"), om(11003, nil, "11:59:00")]
+    #expect(StackDetector.sorted(photos).map(\.stem) == ["_OM11001", "_OM11002", "_OM11003"])
+}
+
+@Test func stackedJPGIsFoundOverTheNumberingRestart() throws {
+    // Eight shots ending in the old cycle give JPG 10001; eight shots across the restart give JPG 10003.
+    let endsAtRestart = PhotoStack(photos: (1...8).map { om(19991 + $0, $0, "15:00:00") })
+    let acrossRestart = PhotoStack(photos: (1...6).map { om(19993 + $0, $0, "15:00:00") }
+        + (7...8).map { om(9994 + $0, $0, "15:00:00") })
+    let folder = try makeTempFolder(files: ["_OM10001.JPG": "a", "_OM10003.JPG": "b"])
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let counts = ["_OM10001.JPG": 8, "_OM10003.JPG": 8]
+    #expect(StackedImages.scan(folder: folder, stacks: [("a", endsAtRestart)]) { _ in counts }["a"]?.fileName == "_OM10001.JPG")
+    #expect(StackedImages.scan(folder: folder, stacks: [("b", acrossRestart)]) { _ in counts }["b"]?.fileName == "_OM10003.JPG")
+}
+
+private func restartFolder(extra: [String: String] = [:]) throws -> (folder: URL, parts: [PhotoStack], whole: PhotoStack) {
+    let head = [om(19998, 1, "15:14:55"), om(19999, 2, "15:14:56")]
+    let tail = [om(10001, 3, "15:14:56"), om(10002, 4, "15:14:57"), om(10003, 5, "15:14:58")]
+    var files = (head + tail).reduce(into: [String: String]()) { $0[$1.fileName] = "x" }
+    files.merge(extra) { first, _ in first }
+    let folder = try makeTempFolder(files: files)
+    return (folder, [PhotoStack(photos: head), PhotoStack(photos: tail)], PhotoStack(photos: head + tail))
+}
+
+@Test func stackFoldersOfMergedStacksBecomeOne() throws {
+    let (folder, parts, whole) = try restartFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let output = LinkWriter.outputFolder(for: folder)
+    _ = LinkWriter.write(stacks: parts, in: folder)
+    #expect(try contents(output).count == 2)
+
+    let before = try snapshot(folder)
+    let dry = LinkWriter.write(stacks: [whole], in: folder, dryRun: true)
+    #expect(try snapshot(folder) == before)
+    #expect(dry.problems.isEmpty && dry.foldersRemoved == 1 && dry.movedLinksRemoved == 2)
+
+    let report = LinkWriter.write(stacks: [whole], in: folder)
+    #expect(report.problems.isEmpty)
+    #expect(report.foldersRenamed == 1 && report.foldersRemoved == 1 && report.movedLinksRemoved == 2)
+    #expect(report.created == 2 && report.alreadyPresent == 3)
+    #expect(try contents(output) == [whole.folderName])
+    #expect(try contents(output.appendingPathComponent(whole.folderName)).count == 5)
+}
+
+@Test func mergedStackLeavesTheUsersFilesAlone() throws {
+    let (folder, parts, whole) = try restartFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let output = LinkWriter.outputFolder(for: folder)
+    _ = LinkWriter.write(stacks: parts, in: folder)
+    let losing = parts[0].folderName
+    try "mine".write(to: output.appendingPathComponent("\(losing)/result.tif"), atomically: true, encoding: .utf8)
+
+    let report = LinkWriter.write(stacks: [whole], in: folder)
+    #expect(report.problems.isEmpty && report.foldersRemoved == 0)
+    #expect(try contents(output.appendingPathComponent(losing)) == ["result.tif"])
+    #expect(try contents(output.appendingPathComponent(whole.folderName)).count == 5)
+}
+
+@Test func captureTimeIsReadAndSurvivesSubfolders() throws {
+    let json = #"[{"FileName":"a.ORF","DriveMode":"Single Shot","DateTimeOriginal":"2026:11:08 15:14:56"},{"FileName":"b.ORF"}]"#
+    let parsed = try ExifToolReader.parse(json: Data(json.utf8))
+    #expect(parsed.map(\.captureTime) == ["2026:11:08 15:14:56", nil])
+
+    let photos = [om(10001, 2, "15:14:57"), om(19999, 1, "15:14:56")].map { $0.renamed(to: "Sub/" + $0.fileName) }
+    let stacks = Tree.detect(photos).stacks
+    #expect(stacks.map { $0.photos.map(\.fileName) } == [["Sub/_OM19999.ORF", "Sub/_OM10001.ORF"]])
+    #expect(stacks[0].photos == [photos[1], photos[0]])
+}

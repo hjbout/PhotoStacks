@@ -412,6 +412,7 @@ struct ReportDetails: View {
         if report.foldersRenamed > 0 { lines.append("\(report.foldersRenamed) mappen hernoemd") }
         if report.brokenLinksRemoved > 0 { lines.append("\(report.brokenLinksRemoved) kapotte links opgeruimd") }
         if report.excludedLinksRemoved > 0 { lines.append("\(report.excludedLinksRemoved) links van uitgesloten foto's weggehaald") }
+        if report.movedLinksRemoved > 0 { lines.append("\(report.movedLinksRemoved) links verplaatst naar een samengevoegde stack") }
         if report.tiffLinksCreated > 0 { lines.append("\(report.tiffLinksCreated) TIFF-links aangemaakt") }
         if report.tiffLinksRemoved > 0 { lines.append("\(report.tiffLinksRemoved) TIFF-links weggehaald") }
         if report.foldersRemoved > 0 { lines.append("\(report.foldersRemoved) lege mappen verwijderd") }

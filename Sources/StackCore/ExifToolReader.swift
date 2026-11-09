@@ -46,7 +46,7 @@ public enum ExifToolReader {
     public static func readPhotos(in folder: URL) throws -> [PhotoInfo] {
         let files = try orfFiles(in: folder)
         if files.isEmpty { return [] }
-        return try parse(json: records(["-fast", "-FileName", "-DriveMode"], files: files, in: folder))
+        return try parse(json: records(["-fast", "-FileName", "-DriveMode", "-DateTimeOriginal"], files: files, in: folder))
     }
 
     /// Where the sensor data of each file is and how to read it (only works for the files exiftool can read).
@@ -163,7 +163,7 @@ public enum ExifToolReader {
         return records.compactMap { record in
             guard let fileName = record["FileName"].map({ "\($0)" }) else { return nil }
             let driveMode = record["DriveMode"].map { "\($0)" } ?? ""
-            return PhotoInfo(fileName: fileName, driveMode: driveMode)
+            return PhotoInfo(fileName: fileName, driveMode: driveMode, captureTime: record["DateTimeOriginal"] as? String)
         }
     }
 

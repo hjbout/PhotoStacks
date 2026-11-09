@@ -39,7 +39,7 @@ public enum Tree {
         var photos: [PhotoInfo] = []
         for directory in directories(under: root) {
             for photo in try ExifToolReader.readPhotos(in: url(root, directory)) {
-                photos.append(PhotoInfo(fileName: join(directory, photo.fileName), driveMode: photo.driveMode))
+                photos.append(photo.renamed(to: join(directory, photo.fileName)))
             }
         }
         return photos
@@ -55,10 +55,10 @@ public enum Tree {
             let local = groups[directory]!.map(\.local)
             let result = StackDetector.detect(local, minimumSize: minimumSize)
             stacks += result.stacks.map { stack in
-                PhotoStack(photos: stack.photos.map { PhotoInfo(fileName: join(directory, $0.fileName), driveMode: $0.driveMode) })
+                PhotoStack(photos: stack.photos.map { $0.renamed(to: join(directory, $0.fileName)) })
             }
             sequencePhotos += result.sequencePhotos
-            loose += result.loosePhotos.map { PhotoInfo(fileName: join(directory, $0.fileName), driveMode: $0.driveMode) }
+            loose += result.loosePhotos.map { $0.renamed(to: join(directory, $0.fileName)) }
         }
         return DetectionResult(stacks: stacks, totalPhotos: photos.count, sequencePhotos: sequencePhotos, loosePhotos: loose)
     }

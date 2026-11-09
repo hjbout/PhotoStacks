@@ -64,13 +64,30 @@ public struct PhotoInfo: Sendable, Equatable, Hashable, Identifiable {
     public let fileName: String
     /// Drive Mode from the Olympus MakerNotes, e.g. "Focus Bracketing, Shot 5".
     public let driveMode: String
+    /// When the photo was taken as exiftool gives it ("2026:11:08 15:14:56", so text order is time order), nil if unknown.
+    /// Whole seconds: several shots of a bracket share one value.
+    public let captureTime: String?
 
-    public init(fileName: String, driveMode: String) {
+    /// The camera numbers its files 1...9999 and then starts at 1 again (0 is skipped).
+    public static let counterCycle = 9999
+
+    /// How many file numbers `counter` lies after `base`, counting over the point where the numbering starts again.
+    public static func counterSteps(from base: Int, to counter: Int) -> Int {
+        ((counter - base) % counterCycle + counterCycle) % counterCycle
+    }
+
+    public init(fileName: String, driveMode: String, captureTime: String? = nil) {
         self.fileName = fileName
         self.driveMode = driveMode
+        self.captureTime = captureTime
     }
 
     public var id: String { fileName }
+
+    /// This photo under another (relative) file name.
+    func renamed(to fileName: String) -> PhotoInfo {
+        PhotoInfo(fileName: fileName, driveMode: driveMode, captureTime: captureTime)
+    }
 
     /// Subfolder of the scanned folder this photo is in ("" for the scanned folder itself).
     public var directory: String {
@@ -84,7 +101,7 @@ public struct PhotoInfo: Sendable, Equatable, Hashable, Identifiable {
 
     /// This photo as seen from its own folder (its file name without the subfolder).
     public var local: PhotoInfo {
-        PhotoInfo(fileName: baseName, driveMode: driveMode)
+        renamed(to: baseName)
     }
 
     /// File name without folder and extension, e.g. "OM1R5855".
